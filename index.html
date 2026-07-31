@@ -641,31 +641,45 @@ function inPlot(e) {
 
 /* Ports. A machine's output leaves the face it is turned toward; inputs enter
    the opposite face, one per required item, so a port means something. */
-function portsOf(e) {
+/* Ports in the machine's own frame: +z is the face it is turned toward, x is
+   across. Kept separate from the world-space version so the renderer can place
+   port meshes as children of an already-rotated group without rotating twice. */
+function localPorts(e) {
   const d = MACHINES[e.type];
-  const dir = DIRS[e.rot % 4];
-  const perp = [dir[1], -dir[0]];
-  const halfDepth = d.h / 2, halfCross = d.w / 2;
-  const at = (fwd, side) => ({
-    x: e.x + dir[0] * fwd + perp[0] * side,
-    z: e.z + dir[1] * fwd + perp[1] * side,
-  });
+  const fd = d.h / 2, cr = d.w / 2;
+  const at = (fwd, side) => ({ x: side, z: fwd });
   if (d.kind === 'splitter') {
-    return { out: [at(halfDepth, 0), at(0, halfCross), at(0, -halfCross)], in: [at(-halfDepth, 0)], inItems: [null] };
+    return { out: [at(fd, 0), at(0, cr), at(0, -cr)], in: [at(-fd, 0)], inItems: [null] };
   }
   if (d.kind === 'merger') {
-    return { out: [at(halfDepth, 0)], in: [at(-halfDepth, 0), at(0, halfCross), at(0, -halfCross)], inItems: [null, null, null] };
+    return { out: [at(fd, 0)], in: [at(-fd, 0), at(0, cr), at(0, -cr)], inItems: [null, null, null] };
   }
   if (d.kind === 'sink') {
-    return { out: [], in: [at(halfDepth, 0), at(-halfDepth, 0), at(0, halfCross), at(0, -halfCross)], inItems: [null, null, null, null] };
+    return { out: [], in: [at(fd, 0), at(-fd, 0), at(0, cr), at(0, -cr)], inItems: [null, null, null, null] };
   }
   const r = recipeOf(e);
   const items = r ? Object.keys(r.in) : [];
   const ins = items.map((_, i) => {
-    const spread = items.length > 1 ? (i / (items.length - 1) - 0.5) * (halfCross * 1.25) : 0;
-    return at(-halfDepth, spread);
+    const spread = items.length > 1 ? (i / (items.length - 1) - 0.5) * (cr * 1.25) : 0;
+    return at(-fd, spread);
   });
-  return { out: [at(halfDepth, 0)], in: ins, inItems: items };
+  return { out: [at(fd, 0)], in: ins, inItems: items };
+}
+
+/* rotation for the renderer, and the matching local -> world transform.
+   rotation.y = rot * 90 deg maps local (x=side, z=fwd) to the same world offset
+   portsOf produces; the opposite sign puts every port 180 degrees out. */
+const machineYaw = (e) => (e.rot % 4) * Math.PI / 2;
+
+function portsOf(e) {
+  const dir = DIRS[e.rot % 4];
+  const perp = [dir[1], -dir[0]];
+  const lp = localPorts(e);
+  const tf = (p) => ({
+    x: e.x + dir[0] * p.z + perp[0] * p.x,
+    z: e.z + dir[1] * p.z + perp[1] * p.x,
+  });
+  return { out: lp.out.map(tf), in: lp.in.map(tf), inItems: lp.inItems, local: lp };
 }
 
 const dist2 = (a, b) => (a.x - b.x) ** 2 + (a.z - b.z) ** 2;
@@ -766,6 +780,11 @@ scene.background = new THREE.Color(0xa8ada1);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+/* Shadows are the single biggest cue that this is a solid world rather than
+   coloured shapes on a plane. Kept cheap: one shadow-casting light, a map sized
+   to the plot, and soft filtering. */
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
 const PITCH = 58 * Math.PI / 180;
@@ -790,16 +809,62 @@ function placeCamera() {
   camera.lookAt(camCenter);
 }
 
-scene.add(new THREE.HemisphereLight(0xf3f1e6, 0x8d9287, 0.95));
-const sun = new THREE.DirectionalLight(0xfff6e2, 0.75);
-sun.position.set(-18, 30, 14);
+/* sky gradient as the background, so the horizon is not a flat wash */
+(function sky() {
+  const c = document.createElement('canvas');
+  c.width = 8; c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 128);
+  grad.addColorStop(0.00, '#9fb6c4');
+  grad.addColorStop(0.55, '#c2cbc6');
+  grad.addColorStop(1.00, '#d8d6c6');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 8, 128);
+  const t = new THREE.CanvasTexture(c);
+  scene.background = t;
+})();
+
+scene.add(new THREE.HemisphereLight(0xdce9f2, 0x6d6a54, 0.72));
+
+const sun = new THREE.DirectionalLight(0xfff2d8, 1.05);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.bias = -0.0006;
+sun.shadow.normalBias = 0.02;
 scene.add(sun);
+scene.add(sun.target);
+
+/* a dim fill from the opposite side so shadowed faces do not go to mud */
+const fill = new THREE.DirectionalLight(0xc8d8e8, 0.28);
+fill.position.set(16, 14, -12);
+scene.add(fill);
+
+/* The shadow camera must actually contain the plot or shadows silently vanish at
+   the edges. Sized from the level on load rather than guessed once. */
+function aimSun() {
+  const cx = L ? L.w / 2 : 8, cz = L ? L.h / 2 : 8;
+  const span = L ? Math.max(L.w, L.h) : 20;
+  sun.target.position.set(cx, 0, cz);
+  sun.position.set(cx - span * 0.55, span * 1.15, cz + span * 0.62);
+  const r = span * 0.95;
+  const s = sun.shadow.camera;
+  s.left = -r; s.right = r; s.top = r; s.bottom = -r;
+  s.near = 0.5; s.far = span * 3.2;
+  s.updateProjectionMatrix();
+}
 
 const world = new THREE.Group();
 scene.add(world);
 const gPad = new THREE.Group(), gMachines = new THREE.Group(), gBelts = new THREE.Group(),
-      gRings = new THREE.Group(), gItems = new THREE.Group(), gGhost = new THREE.Group();
-world.add(gPad, gBelts, gMachines, gRings, gItems, gGhost);
+      gRings = new THREE.Group(), gItems = new THREE.Group(), gGhost = new THREE.Group(),
+      gEnv = new THREE.Group();
+world.add(gEnv, gPad, gBelts, gMachines, gRings, gItems, gGhost);
+
+/* deterministic scatter, so the landscape is identical every reload */
+function rng(seed) {
+  let s = seed >>> 0;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+}
 
 const raycaster = new THREE.Raycaster();
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -818,38 +883,137 @@ function clear(g) {
    ============================================================ */
 function buildPad() {
   clear(gPad);
-  const pad = new THREE.Mesh(new THREE.BoxGeometry(L.w, 0.4, L.h),
-    new THREE.MeshLambertMaterial({ color: 0xd6d8cd }));
-  pad.position.set(L.w / 2, -0.2, L.h / 2);
-  gPad.add(pad);
+  clear(gEnv);
+  aimSun();
 
+  /* ---- concrete slab: the buildable plot, with a chamfered rim ---- */
+  const slabH = 0.55;
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(L.w, slabH, L.h),
+    new THREE.MeshLambertMaterial({ color: 0xd7d4c6 }));
+  slab.position.set(L.w / 2, -slabH / 2 + 0.02, L.h / 2);
+  slab.receiveShadow = true;
+  gPad.add(slab);
+
+  /* a slightly wider, darker apron so the slab reads as poured, not floating */
+  const apron = new THREE.Mesh(new THREE.BoxGeometry(L.w + 0.9, 0.34, L.h + 0.9),
+    new THREE.MeshLambertMaterial({ color: 0xa89f8c }));
+  apron.position.set(L.w / 2, -0.34, L.h / 2);
+  apron.receiveShadow = true;
+  gPad.add(apron);
+
+  /* ---- ruler ticks along the slab edge: the currency is metres ---- */
   const ticks = [];
-  for (let x = 0; x <= L.w; x++) { const t = x % 5 === 0 ? 0.62 : 0.26; ticks.push(x, 0.006, 0, x, 0.006, t, x, 0.006, L.h, x, 0.006, L.h - t); }
-  for (let z = 0; z <= L.h; z++) { const t = z % 5 === 0 ? 0.62 : 0.26; ticks.push(0, 0.006, z, t, 0.006, z, L.w, 0.006, z, L.w - t, 0.006, z); }
+  const y = 0.025;
+  for (let x = 0; x <= L.w; x++) { const t = x % 5 === 0 ? 0.66 : 0.28; ticks.push(x, y, 0, x, y, t, x, y, L.h, x, y, L.h - t); }
+  for (let z = 0; z <= L.h; z++) { const t = z % 5 === 0 ? 0.66 : 0.28; ticks.push(0, y, z, t, y, z, L.w, y, z, L.w - t, y, z); }
   const tg = new THREE.BufferGeometry();
   tg.setAttribute('position', new THREE.Float32BufferAttribute(ticks, 3));
-  gPad.add(new THREE.LineSegments(tg, new THREE.LineBasicMaterial({ color: 0x8f938a })));
+  gPad.add(new THREE.LineSegments(tg, new THREE.LineBasicMaterial({ color: 0x8d8b7d })));
 
-  const border = [0, 0.007, 0, L.w, 0.007, 0, L.w, 0.007, L.h, 0, 0.007, L.h, 0, 0.007, 0];
-  const bg = new THREE.BufferGeometry();
-  bg.setAttribute('position', new THREE.Float32BufferAttribute(border, 3));
-  gPad.add(new THREE.Line(bg, new THREE.LineBasicMaterial({ color: 0x6f736a })));
+  /* ---- terrain the slab sits in ---- */
+  const PAD = 34;
+  const seg = 44;
+  const gw = L.w + PAD * 2, gh = L.h + PAD * 2;
+  const ground = new THREE.PlaneGeometry(gw, gh, seg, seg);
+  ground.rotateX(-Math.PI / 2);
+  const pos = ground.attributes.position;
+  const col = [];
+  const r0 = rng(1337);
+  const noise = [];
+  for (let i = 0; i < (seg + 1) * (seg + 1); i++) noise.push(r0());
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i) + L.w / 2, z = pos.getZ(i) + L.h / 2;
+    /* stay perfectly flat under and near the slab, roll gently further out */
+    const outX = Math.max(0, Math.max(-x, x - L.w));
+    const outZ = Math.max(0, Math.max(-z, z - L.h));
+    const out = Math.hypot(outX, outZ);
+    const ramp = Math.min(1, Math.max(0, (out - 3) / 16));
+    const n = noise[i % noise.length];
+    pos.setY(i, -0.5 + ramp * (n * 2.6 - 0.6) * 1.15);
+    const g = 0.5 + n * 0.16 + ramp * 0.06;
+    col.push(0.40 * g + 0.10, 0.44 * g + 0.09, 0.30 * g + 0.07);
+  }
+  ground.computeVertexNormals();
+  ground.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  const groundMesh = new THREE.Mesh(ground,
+    new THREE.MeshLambertMaterial({ vertexColors: true }));
+  groundMesh.position.set(L.w / 2, 0, L.h / 2);
+  groundMesh.receiveShadow = true;
+  gEnv.add(groundMesh);
 
+  /* ---- scattered boulders and scrub outside the plot ---- */
+  const rr = rng(90210);
+  const bould = [], tuft = [];
+  for (let i = 0; i < 200; i++) {
+    const x = -PAD + rr() * (L.w + PAD * 2), z = -PAD + rr() * (L.h + PAD * 2);
+    const outside = x < -2.4 || z < -2.4 || x > L.w + 2.4 || z > L.h + 2.4;
+    if (!outside) continue;
+    (rr() < 0.42 ? bould : tuft).push([x, z, 0.4 + rr() * 1.5, rr() * 6.28]);
+  }
+  if (bould.length) {
+    const m = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0),
+      new THREE.MeshLambertMaterial({ color: 0x87897c }), bould.length);
+    const mx = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+    bould.forEach(([x, z, s, a], i) => {
+      e.set(a * 0.3, a, a * 0.2); q.setFromEuler(e);
+      mx.compose(new THREE.Vector3(x, -0.35 + s * 0.3, z), q, new THREE.Vector3(s * 0.6, s * 0.45, s * 0.6));
+      m.setMatrixAt(i, mx);
+    });
+    m.receiveShadow = true;
+    gEnv.add(m);
+  }
+  if (tuft.length) {
+    const m = new THREE.InstancedMesh(new THREE.ConeGeometry(0.42, 1.5, 5),
+      new THREE.MeshLambertMaterial({ color: 0x5f6b45 }), tuft.length);
+    const mx = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+    tuft.forEach(([x, z, s, a], i) => {
+      e.set(0, a, 0); q.setFromEuler(e);
+      mx.compose(new THREE.Vector3(x, -0.4 + s * 0.5, z), q, new THREE.Vector3(s, s * 1.3, s));
+      m.setMatrixAt(i, mx);
+    });
+    gEnv.add(m);
+  }
+
+  /* ---- ore nodes: a cluster of exposed ore, not a plain disc ---- */
   for (const n of L.nodes) {
-    const ring = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.15, 0.16, 26),
-      new THREE.MeshLambertMaterial({ color: 0x6f6152 }));
-    ring.position.set(n.x, 0.06, n.z);
-    gPad.add(ring);
+    const pit = new THREE.Mesh(new THREE.CylinderGeometry(1.16, 1.02, 0.18, 28),
+      new THREE.MeshLambertMaterial({ color: 0x6a5b4a }));
+    pit.position.set(n.x, 0.05, n.z);
+    pit.receiveShadow = true;
+    gPad.add(pit);
+    const nr = rng(Math.round(n.x * 97 + n.z * 31));
+    for (let i = 0; i < 9; i++) {
+      const a = nr() * 6.283, d = nr() * 0.82, s = 0.15 + nr() * 0.2;
+      const lump = new THREE.Mesh(new THREE.IcosahedronGeometry(s, 0),
+        new THREE.MeshLambertMaterial({ color: n.rate >= 60 ? 0xa8734a : 0x8d7b6b }));
+      lump.position.set(n.x + Math.cos(a) * d, 0.13 + s * 0.5, n.z + Math.sin(a) * d);
+      lump.rotation.set(a, a * 1.7, a * 0.4);
+      lump.castShadow = true;
+      gPad.add(lump);
+    }
     const s = makeSprite(n.rate + '/min');
-    s.position.set(n.x, 0.7, n.z);
+    s.position.set(n.x, 1.05, n.z);
     gPad.add(s);
   }
+
+  /* ---- obstacle rocks on the plot ---- */
   for (const r of L.rocks) {
-    const m = new THREE.Mesh(new THREE.DodecahedronGeometry(r.r),
-      new THREE.MeshLambertMaterial({ color: 0x8f9188 }));
-    m.position.set(r.x, r.r * 0.55, r.z);
-    m.rotation.set(r.x, r.z, 0.4);
-    gPad.add(m);
+    const g = new THREE.Group();
+    const main = new THREE.Mesh(new THREE.DodecahedronGeometry(r.r, 0),
+      new THREE.MeshLambertMaterial({ color: 0x8b8d83 }));
+    main.position.y = r.r * 0.62;
+    main.rotation.set(r.x, r.z, 0.4);
+    main.scale.set(1, 0.82, 1);
+    main.castShadow = true; main.receiveShadow = true;
+    g.add(main);
+    const chip = new THREE.Mesh(new THREE.DodecahedronGeometry(r.r * 0.42, 0),
+      new THREE.MeshLambertMaterial({ color: 0x9a9c91 }));
+    chip.position.set(r.r * 0.72, r.r * 0.28, -r.r * 0.5);
+    chip.rotation.set(r.z, r.x, 1.1);
+    chip.castShadow = true;
+    g.add(chip);
+    g.position.set(r.x, 0, r.z);
+    gPad.add(g);
   }
 }
 
@@ -1081,79 +1245,213 @@ function yAt(l, s) {
 /* ============================================================
    RENDER
    ============================================================ */
+/* ---- machine bodies ----
+   Each type gets its own silhouette. Colour alone does not survive being shrunk
+   to thumb size on a phone, and pillar 4 asks for identification at a glance.
+   Moving parts are stashed on userData so the frame loop can animate them
+   without rebuilding geometry. */
+const MAT = (c) => new THREE.MeshLambertMaterial({ color: c });
+const STEEL = 0xd9d5c6, DARK = 0x272c2e, TRIM = 0xb0a893;
+
+function part(group, geo, mat, x, y, z, shadow) {
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set(x, y, z);
+  if (shadow !== false) { m.castShadow = true; m.receiveShadow = true; }
+  group.add(m);
+  return m;
+}
+
 function buildMachines() {
   clear(gMachines);
   for (const e of ents) {
     const def = MACHINES[e.type], b = boxOf(e);
     const g = new THREE.Group();
-    const bodyH = (def.kind === 'splitter' || def.kind === 'merger') ? 0.3 : 0.62;
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(b.ex * 2 - 0.12, bodyH, b.ez * 2 - 0.12),
-      new THREE.MeshLambertMaterial({ color: MACHINE_COLOR[e.type] }));
-    body.position.set(e.x, bodyH / 2, e.z);
-    g.add(body);
-    if (def.kind === 'machine' || def.kind === 'miner') {
-      const cap = new THREE.Mesh(
-        new THREE.BoxGeometry(Math.min(b.ex, b.ez), 0.34, Math.min(b.ex, b.ez)),
-        new THREE.MeshLambertMaterial({ color: 0xe6e2d5 }));
-      cap.position.set(e.x, bodyH + 0.17, e.z);
-      g.add(cap);
+    g.position.set(e.x, 0, e.z);
+    g.rotation.y = machineYaw(e);   /* local +Z is the output face */
+    const anim = {};
+    const body = MAT(MACHINE_COLOR[e.type]);
+    /* footprint in local space: depth along Z, width along X */
+    const w = def.w, d = def.h;
+
+    if (def.kind === 'miner') {
+      part(g, new THREE.BoxGeometry(w - 0.2, 0.4, d - 0.2), body, 0, 0.2, 0);
+      /* four legs and a drill tower */
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        part(g, new THREE.BoxGeometry(0.16, 0.9, 0.16), MAT(DARK), sx * (w / 2 - 0.28), 0.45, sz * (d / 2 - 0.28));
+      }
+      part(g, new THREE.BoxGeometry(w - 0.55, 0.5, d - 0.55), body, 0, 1.05, 0);
+      anim.drum = part(g, new THREE.CylinderGeometry(0.34, 0.34, 0.62, 12), MAT(TRIM), 0, 1.55, 0);
+      anim.drum.rotation.z = Math.PI / 2;
+      part(g, new THREE.ConeGeometry(0.26, 0.7, 8), MAT(DARK), 0, 0.5, 0);
+      part(g, new THREE.BoxGeometry(0.34, 0.2, 0.5), MAT(DARK), 0, 0.45, d / 2 - 0.1);
+
+    } else if (e.type === 'smelter') {
+      part(g, new THREE.BoxGeometry(w - 0.18, 0.75, d - 0.18), body, 0, 0.375, 0);
+      /* firebox mouth glows when it is actually running */
+      anim.glow = part(g, new THREE.BoxGeometry(w * 0.5, 0.26, 0.08),
+        new THREE.MeshBasicMaterial({ color: 0x2a1a12 }), 0, 0.34, d / 2 - 0.06, false);
+      part(g, new THREE.CylinderGeometry(0.2, 0.26, 1.15, 10), MAT(0x6d5f52), -w / 2 + 0.42, 1.2, -d / 2 + 0.42);
+      part(g, new THREE.CylinderGeometry(0.26, 0.2, 0.16, 10), MAT(DARK), -w / 2 + 0.42, 1.85, -d / 2 + 0.42);
+      part(g, new THREE.BoxGeometry(w * 0.42, 0.3, d * 0.42), MAT(STEEL), w * 0.15, 0.9, 0);
+      anim.puff = part(g, new THREE.SphereGeometry(0.3, 8, 6),
+        new THREE.MeshLambertMaterial({ color: 0xd8d2c4, transparent: true, opacity: 0.5 }),
+        -w / 2 + 0.42, 2.15, -d / 2 + 0.42, false);
+
+    } else if (e.type === 'constructor') {
+      part(g, new THREE.BoxGeometry(w - 0.18, 0.5, d - 0.18), body, 0, 0.25, 0);
+      part(g, new THREE.BoxGeometry(w - 0.5, 0.32, d - 1.1), MAT(STEEL), 0, 0.66, 0);
+      /* gantry with a press head that strokes up and down */
+      for (const sx of [-1, 1]) part(g, new THREE.BoxGeometry(0.14, 0.95, 0.14), MAT(DARK), sx * (w / 2 - 0.24), 0.97, 0);
+      part(g, new THREE.BoxGeometry(w - 0.3, 0.16, 0.4), MAT(DARK), 0, 1.42, 0);
+      anim.press = part(g, new THREE.BoxGeometry(w - 0.72, 0.3, 0.5), MAT(TRIM), 0, 1.05, 0);
+      part(g, new THREE.BoxGeometry(0.3, 0.18, 0.44), MAT(DARK), 0, 0.4, d / 2 - 0.08);
+
+    } else if (e.type === 'assembler') {
+      part(g, new THREE.BoxGeometry(w - 0.18, 0.46, d - 0.18), body, 0, 0.23, 0);
+      part(g, new THREE.BoxGeometry(w - 0.7, 0.14, d - 0.7), MAT(0x3a3f41), 0, 0.53, 0);
+      /* two arms that sweep in opposite directions */
+      for (const s of [-1, 1]) {
+        const post = new THREE.Group();
+        post.position.set(s * (w / 2 - 0.62), 0.6, s * 0.5);
+        part(post, new THREE.CylinderGeometry(0.17, 0.2, 0.5, 10), MAT(DARK), 0, 0.25, 0);
+        const arm = new THREE.Group();
+        arm.position.y = 0.5;
+        part(arm, new THREE.BoxGeometry(0.9, 0.13, 0.16), MAT(TRIM), 0.45, 0, 0);
+        part(arm, new THREE.BoxGeometry(0.2, 0.26, 0.2), MAT(STEEL), 0.9, -0.08, 0);
+        post.add(arm);
+        g.add(post);
+        (anim.arms = anim.arms || []).push(arm);
+      }
+      part(g, new THREE.BoxGeometry(w * 0.5, 0.34, 0.3), MAT(STEEL), 0, 0.68, -d / 2 + 0.3);
+      part(g, new THREE.BoxGeometry(0.34, 0.2, 0.4), MAT(DARK), 0, 0.4, d / 2 - 0.1);
+
+    } else if (def.kind === 'splitter' || def.kind === 'merger') {
+      part(g, new THREE.CylinderGeometry(0.46, 0.5, 0.3, 6), body, 0, 0.15, 0);
+      part(g, new THREE.CylinderGeometry(0.2, 0.2, 0.1, 8), MAT(STEEL), 0, 0.33, 0);
+
+    } else if (def.kind === 'sink') {
+      /* a depot shed, open toward the plot */
+      part(g, new THREE.BoxGeometry(w, 0.22, d), MAT(0x8e8b7a), 0, 0.11, 0);
+      part(g, new THREE.BoxGeometry(w - 0.1, 0.9, 0.16), body, 0, 0.55, -d / 2 + 0.08);
+      for (const s of [-1, 1]) part(g, new THREE.BoxGeometry(0.16, 0.9, d - 0.2), body, s * (w / 2 - 0.08), 0.55, 0);
+      const roof = part(g, new THREE.BoxGeometry(w + 0.3, 0.12, d + 0.3), MAT(0x445a4c), 0, 1.06, 0);
+      roof.rotation.x = 0.04;
+      part(g, new THREE.BoxGeometry(w * 0.7, 0.1, 0.1), MAT(TRIM), 0, 0.22, d / 2 - 0.2);
     }
-    /* ports, so the player can see where a stroke may begin and end */
-    const P = portsOf(e);
+
+    /* ---- ports ----
+       Placed in local space. The group is already rotated, so using world offsets
+       here would rotate them a second time and put every port on the wrong face. */
+    const P = localPorts(e);
     for (const p of P.out) {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.34),
-        new THREE.MeshLambertMaterial({ color: 0x1b2124 }));
-      m.position.set(p.x, bodyH + 0.02, p.z);
-      g.add(m);
+      part(g, new THREE.BoxGeometry(0.4, 0.22, 0.3), MAT(DARK), p.x, 0.34, p.z);
+      part(g, new THREE.BoxGeometry(0.3, 0.07, 0.18), MAT(0x8f9a5a), p.x, 0.47, p.z, false);
     }
     P.in.forEach((p, i) => {
       const item = P.inItems[i];
-      const m = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.14, 0.3),
-        new THREE.MeshLambertMaterial({ color: item ? ITEMS[item].color : 0xf0eee5 }));
-      m.position.set(p.x, bodyH + 0.02, p.z);
-      g.add(m);
+      part(g, new THREE.BoxGeometry(0.36, 0.2, 0.28),
+        MAT(item ? ITEMS[item].color : 0xe7e3d6), p.x, 0.32, p.z);
     });
+
     if (e === selected) {
       const halo = new THREE.Mesh(
-        new THREE.RingGeometry(Math.max(b.ex, b.ez) + 0.16, Math.max(b.ex, b.ez) + 0.26, 40),
+        new THREE.RingGeometry(Math.max(b.ex, b.ez) + 0.18, Math.max(b.ex, b.ez) + 0.3, 40),
         new THREE.MeshBasicMaterial({ color: 0x161d21, side: THREE.DoubleSide }));
       halo.rotation.x = -Math.PI / 2;
-      halo.position.set(e.x, 0.03, e.z);
+      halo.position.y = 0.04;
       g.add(halo);
     }
+
+    g.userData.anim = anim;
+    g.userData.ent = e;
     gMachines.add(g);
   }
 }
 
+/* ---- efficiency rings ----
+   Built once per solve, not per frame. The previous version disposed and
+   recreated ring geometry inside the render loop, which is fine at five machines
+   and ruinous at fifty. Only the arc geometry is regenerated, and only when the
+   displayed percentage actually moves. */
+const ringFor = new Map();
 function buildRings() {
   clear(gRings);
+  ringFor.clear();
   if (phase === 'edit') return;
   for (const e of ents) {
     const def = MACHINES[e.type];
     if (def.kind === 'splitter' || def.kind === 'merger' || def.kind === 'sink') continue;
-    if (!isLive(e)) continue;
     const b = boxOf(e);
-    const r = Math.max(b.ex, b.ez) + 0.3;
-    const frac = Math.max(0.001, Math.min(1, e.f || 0));
-    const track = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.14, 44),
-      new THREE.MeshBasicMaterial({ color: 0xb0b3aa, side: THREE.DoubleSide }));
+    const r = Math.max(b.ex, b.ez) + 0.34;
+    const track = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.15, 46),
+      new THREE.MeshBasicMaterial({ color: 0x9fa298, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }));
     track.rotation.x = -Math.PI / 2;
-    track.position.set(e.x, 0.02, e.z);
-    gRings.add(track);
-    const fill = new THREE.Mesh(
-      new THREE.RingGeometry(r, r + 0.14, Math.max(3, Math.ceil(44 * frac)), 1, Math.PI / 2, -Math.PI * 2 * frac),
-      new THREE.MeshBasicMaterial({ color: STATE_COLOR[e.state] || 0x888888, side: THREE.DoubleSide }));
+    track.position.set(e.x, 0.045, e.z);
+    const fill = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.15, 46, 1, Math.PI / 2, -0.001),
+      new THREE.MeshBasicMaterial({ color: 0x888888, side: THREE.DoubleSide }));
     fill.rotation.x = -Math.PI / 2;
-    fill.position.set(e.x, 0.028, e.z);
-    gRings.add(fill);
+    fill.position.set(e.x, 0.055, e.z);
+    gRings.add(track, fill);
+    ringFor.set(e.id, { track, fill, r, shown: -1 });
+  }
+  updateRings();
+}
+
+function updateRings() {
+  for (const e of ents) {
+    const h = ringFor.get(e.id);
+    if (!h) continue;
+    const live = isLive(e);
+    h.track.visible = live;
+    h.fill.visible = live;
+    if (!live) continue;
+    const frac = Math.max(0.001, Math.min(1, e.f || 0));
+    h.fill.material.color.setHex(STATE_COLOR[e.state] || 0x888888);
+    if (Math.abs(frac - h.shown) > 0.01) {
+      h.shown = frac;
+      h.fill.geometry.dispose();
+      h.fill.geometry = new THREE.RingGeometry(h.r, h.r + 0.15,
+        Math.max(3, Math.ceil(46 * frac)), 1, Math.PI / 2, -Math.PI * 2 * frac);
+    }
   }
 }
 
 /* one ribbon mesh for every belt, built by hand so it can carry vertex colours
    and per-point elevation for the crossings */
-function ribbon(list, colorFor) {
-  const pos = [], col = [], idx = [], nrm = [];
+/* ---- conveyor geometry ----
+   The belt surface carries a scrolling chevron texture. Because visual belt speed
+   is a tuned constant (§5.1) rather than derived from throughput, every belt
+   scrolls at the same rate and one shared material can drive them all — the item
+   spacing is what conveys the actual rate. UVs run along arc length so the
+   pattern does not stretch on curves. */
+function beltTexture() {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, 64, 64);
+  g.strokeStyle = 'rgba(0,0,0,0.30)';
+  g.lineWidth = 9;
+  g.beginPath();
+  g.moveTo(4, 6); g.lineTo(32, 30); g.lineTo(60, 6);
+  g.stroke();
+  g.strokeStyle = 'rgba(0,0,0,0.13)';
+  g.lineWidth = 5;
+  g.beginPath(); g.moveTo(0, 62); g.lineTo(64, 62); g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = THREE.RepeatWrapping;
+  t.wrapT = THREE.ClampToEdgeWrapping;
+  return t;
+}
+const BELT_TEX = beltTexture();
+/* A fresh material per rebuild: clear() disposes the materials of the children it
+   removes, so a shared one would be destroyed the first time a belt is edited.
+   The texture is shared and survives, which is what the scroll animation needs. */
+const newBeltMat = () => new THREE.MeshLambertMaterial({
+  vertexColors: true, map: BELT_TEX, side: THREE.DoubleSide });
+
+function ribbon(list, colorFor, withUV) {
+  const pos = [], col = [], idx = [], nrm = [], uv = [];
   let base = 0;
   const c = new THREE.Color();
   for (const l of list) {
@@ -1172,6 +1470,7 @@ function ribbon(list, colorFor) {
       pos.push(p.x + tz * BELT_HW, y, p.z - tx * BELT_HW);
       nrm.push(0, 1, 0, 0, 1, 0);
       col.push(c.r, c.g, c.b, c.r, c.g, c.b);
+      uv.push(arc[i] / 0.9, 0, arc[i] / 0.9, 1);
     }
     for (let i = 0; i < pts.length - 1; i++) {
       const a = base + i * 2;
@@ -1184,34 +1483,102 @@ function ribbon(list, colorFor) {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  if (withUV !== false) g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setIndex(idx);
   return g;
 }
 
 function buildBelts() {
   clear(gBelts);
-  const g = ribbon(links, (l, c) => {
+  if (!links.length) return;
+
+  const surface = ribbon(links, (l, c) => {
     const tier = BELTS.find((t) => t.id === l.tier) || BELTS[0];
     c.setHex(tier.color);
     if (phase !== 'edit') {
       const load = Math.min(1, (l.flow || 0) / l.cap);
-      c.lerp(new THREE.Color(0xffffff), 0.12 + load * 0.5);
+      c.lerp(new THREE.Color(0xffffff), 0.14 + load * 0.5);
       if (l.saturated && l.overCapacity) c.setHex(0xc2402f);
+    } else {
+      c.lerp(new THREE.Color(0xffffff), 0.2);
     }
   });
-  if (!g) return;
-  gBelts.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })));
+  if (surface) {
+    const m = new THREE.Mesh(surface, newBeltMat());
+    m.receiveShadow = true;
+    gBelts.add(m);
+  }
+
+  /* side rails and support legs — this is most of what makes a belt read as a
+     structure standing on the ground rather than a painted stripe */
+  const railGeo = [], legs = [];
+  const rail = new THREE.Group();
+  for (const l of links) {
+    const pts = l.path, arc = l.arc;
+    for (let side = -1; side <= 1; side += 2) {
+      const rp = [], ra = [];
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+        let tx = b.x - a.x, tz = b.z - a.z;
+        const tl = Math.hypot(tx, tz) || 1;
+        tx /= tl; tz /= tl;
+        rp.push({ x: p.x + (-tz) * side * (BELT_HW + 0.045), z: p.z + tx * side * (BELT_HW + 0.045) });
+        ra.push(arc[i]);
+      }
+      railGeo.push({ path: rp, arc: ra, bumps: l.bumps, tier: l.tier, off: 0.085 });
+    }
+    for (let s = 0.45; s < l.length; s += 1.5) legs.push({ l, s });
+  }
+  const railG = ribbon(railGeo, (l, c) => c.setHex(0x5c6167), false);
+  if (railG) {
+    /* lift the rails just above the belt surface */
+    const p = railG.attributes.position;
+    for (let i = 0; i < p.count; i++) p.setY(i, p.getY(i) + 0.085);
+    railG.attributes.position.needsUpdate = true;
+    const m = new THREE.Mesh(railG, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+    m.castShadow = true;
+    gBelts.add(m);
+  }
+  if (legs.length) {
+    const lm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1, 1, 0.1),
+      new THREE.MeshLambertMaterial({ color: 0x4c5257 }), legs.length);
+    const mx = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3();
+    legs.forEach(({ l, s }, i) => {
+      const p = posAt(l, s);
+      const top = p.y - 0.11;
+      const hh = Math.max(0.12, top);
+      v.set(p.x, top - hh / 2, p.z);
+      mx.compose(v, q, new THREE.Vector3(1, hh, 1));
+      lm.setMatrixAt(i, mx);
+    });
+    lm.castShadow = true;
+    gBelts.add(lm);
+  }
 }
 
+/* ---- items ----
+   Distinct shapes per type. An ore lump and an iron plate should be tellable
+   apart while zoomed out, which colour alone does not manage. */
+const ITEM_GEO = {
+  ore:   () => new THREE.IcosahedronGeometry(0.15, 0),
+  ingot: () => new THREE.BoxGeometry(0.3, 0.13, 0.19),
+  plate: () => new THREE.BoxGeometry(0.34, 0.06, 0.26),
+  rod:   () => new THREE.CylinderGeometry(0.06, 0.06, 0.4, 7),
+  screw: () => new THREE.CylinderGeometry(0.05, 0.05, 0.17, 6),
+  reinf: () => new THREE.BoxGeometry(0.36, 0.1, 0.3),
+};
 const itemMeshes = {};
 function buildItemPools() {
   clear(gItems);
   for (const k of Object.keys(itemMeshes)) delete itemMeshes[k];
   for (const key of Object.keys(ITEMS)) {
-    const m = new THREE.InstancedMesh(new THREE.BoxGeometry(0.26, 0.2, 0.26),
+    const geo = (ITEM_GEO[key] || (() => new THREE.BoxGeometry(0.24, 0.18, 0.24)))();
+    const m = new THREE.InstancedMesh(geo,
       new THREE.MeshLambertMaterial({ color: ITEMS[key].color }), MAX_ITEMS_PER_TYPE);
     m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     m.count = 0; m.frustumCulled = false;
+    m.castShadow = true;
     itemMeshes[key] = m;
     gItems.add(m);
   }
@@ -1229,7 +1596,8 @@ function posAt(l, s) {
   };
 }
 
-const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _sc = new THREE.Vector3(1, 1, 1), _v = new THREE.Vector3();
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _sc = new THREE.Vector3(1, 1, 1),
+      _v = new THREE.Vector3(), _e = new THREE.Euler();
 function updateItems(t) {
   const counts = {};
   for (const k of Object.keys(itemMeshes)) counts[k] = 0;
@@ -1243,9 +1611,14 @@ function updateItems(t) {
       if (len / spacing > MAX_ITEMS_PER_TYPE / 6) spacing = len / (MAX_ITEMS_PER_TYPE / 6);
       const front = (t - (l.startT || 0)) * BELT_SPEED;
       if (front <= 0) continue;
+      const lie = l.item === 'rod' || l.item === 'screw';   /* cylinders lie down */
       for (let s = front % spacing; s <= Math.min(len, front); s += spacing) {
         if (counts[l.item] >= MAX_ITEMS_PER_TYPE) break;
         const p = posAt(l, s);
+        const q = posAt(l, Math.min(len, s + 0.25));
+        const head = Math.atan2(q.x - p.x, q.z - p.z);
+        _e.set(lie ? Math.PI / 2 : 0, head, 0, 'YXZ');
+        _q.setFromEuler(_e);
         _v.set(p.x, p.y, p.z);
         _m.compose(_v, _q, _sc);
         mesh.setMatrixAt(counts[l.item]++, _m);
@@ -1790,17 +2163,56 @@ function loadLevel(i) {
 /* ============================================================
    LOOP
    ============================================================ */
-let last = performance.now();
+/* ---- moving parts ----
+   Design doc §11: a machine should animate so 100% vs 60% is felt, not only read.
+   Speed is proportional to the machine's actual rate, so a starved machine
+   visibly labours. */
+function animateMachines(t) {
+  for (const g of gMachines.children) {
+    const e = g.userData.ent;
+    const a = g.userData.anim;
+    if (!e || !a) continue;
+    const f = (phase !== 'edit' && isLive(e)) ? (e.f || 0) : 0;
+    if (a.drum) a.drum.rotation.x = t * f * 5.5;
+    if (a.press) a.press.position.y = 1.05 - (f > 0 ? Math.abs(Math.sin(t * f * 3.4)) * 0.3 : 0);
+    if (a.arms) a.arms.forEach((arm, i) => {
+      arm.rotation.y = Math.sin(t * f * 2.6 + i * Math.PI) * (0.5 + 0.35 * f);
+    });
+    if (a.glow) {
+      const heat = f > 0 ? 0.35 + 0.65 * Math.abs(Math.sin(t * 2.2)) * f : 0;
+      a.glow.material.color.setRGB(0.16 + heat * 0.84, 0.10 + heat * 0.42, 0.07 + heat * 0.05);
+    }
+    if (a.puff) {
+      if (f <= 0.001) { a.puff.visible = false; }
+      else {
+        a.puff.visible = true;
+        const cyc = (t * (0.35 + f * 0.55)) % 1;
+        a.puff.position.y = 2.15 + cyc * 1.5;
+        a.puff.scale.setScalar(0.5 + cyc * 1.5);
+        a.puff.material.opacity = 0.45 * (1 - cyc) * f;
+      }
+    }
+  }
+}
+
+let last = performance.now(), clock = 0;
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  clock += dt;
   if (Math.abs(yawTarget - yaw) > 1e-4) yaw += (yawTarget - yaw) * Math.min(1, dt * 9);
   placeCamera();
   if (phase === 'running') {
     runT += dt;
-    buildRings();
     if (runT >= spinUp) validate();
   }
+  if (phase !== 'edit') {
+    updateRings();
+    /* one shared scroll: visual belt speed is constant by design, and 0.9 is the
+       texture's world period in metres */
+    BELT_TEX.offset.x = -(runT * BELT_SPEED) / 0.9;
+  }
+  animateMachines(clock);
   updateItems(runT);
   updateLabels();
   renderer.render(scene, camera);

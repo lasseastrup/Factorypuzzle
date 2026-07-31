@@ -21,9 +21,20 @@ function El(tag) {
     setPointerCapture() {}, releasePointerCapture() {},
     querySelectorAll(sel) { return collect(sel); },
     getContext() {
-      return { scale() {}, fillText() {}, measureText: () => ({ width: 10 }),
-               clearRect() {}, fillRect() {}, set font(v) {}, set fillStyle(v) {},
-               set textAlign(v) {}, set textBaseline(v) {} };
+      /* enough of CanvasRenderingContext2D for the sky gradient, belt chevrons
+         and text sprites the game generates at load */
+      return {
+        scale() {}, translate() {}, rotate() {}, save() {}, restore() {},
+        fillText() {}, measureText: () => ({ width: 10 }),
+        clearRect() {}, fillRect() {}, strokeRect() {},
+        beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, arc() {},
+        stroke() {}, fill() {},
+        createLinearGradient: () => ({ addColorStop() {} }),
+        createRadialGradient: () => ({ addColorStop() {} }),
+        set font(v) {}, set fillStyle(v) {}, set strokeStyle(v) {},
+        set lineWidth(v) {}, set lineCap(v) {}, set globalAlpha(v) {},
+        set textAlign(v) {}, set textBaseline(v) {},
+      };
     },
     get className() { return [...this.classList._s].join(' '); },
     set className(v) { this.classList._s = new Set(String(v).split(/\s+/).filter(Boolean)); },
@@ -66,7 +77,11 @@ global.requestAnimationFrame = (fn) => { if (frames++ < maxFrames) setImmediate(
 
 /* stub the renderer — no WebGL here, but keep everything else real */
 class FakeRenderer {
-  constructor() { this.domElement = El('canvas'); }
+  constructor() {
+    this.domElement = El('canvas');
+    this.shadowMap = { enabled: false, type: null };
+    this.capabilities = { isWebGL2: true, maxTextureSize: 4096 };
+  }
   setPixelRatio() {} setSize() {} render() {}
 }
 THREE.WebGLRenderer = FakeRenderer;
@@ -89,10 +104,12 @@ const body = blocks[blocks.length-1];
 
 /* expose internals for poking after boot */
 const exports_ = ['loadLevel','addEntity','resolve','startRun','scene','camera','LEVELS','MACHINES','groundAt','handleTap','portsOf','freeOutPort','commitStroke','beltMetres','computeCrossings','entAt','setTool','frame','validate','score','updateLabels',
-  'simplify','chaikin','resample','minRadius','segHit','routeBlocked','arcTable','MIN_RADIUS','canPlace'];
+  'simplify','chaikin','resample','minRadius','segHit','routeBlocked','arcTable','MIN_RADIUS','canPlace',
+  'sun','renderer','animateMachines','updateRings','buildRings','gMachines','BELT_TEX',
+  'portsOf','localPorts','machineYaw','buildMachines'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
-  + '\n;globalThis.__api = { ents: function(){return ents;}, links: function(){return links;},'
+  + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
   + ' getPhase: function(){return phase;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
@@ -246,3 +263,86 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 900);
+
+/* --- lighting and shadow audit ---
+   A shadow camera that does not contain the plot drops shadows silently at the
+   edges, in the same family of bug as the fog that painted the whole world in the
+   background colour. Cheap to assert, invisible to catch by eye. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- lighting / shadows ---');
+
+  api.loadLevel(3);            // the largest plot
+  api.frame(performance.now());
+  const lv = api.LEVELS[3];
+  const sun = api.sun;
+  const s = sun.shadow.camera;
+
+  ok(api.renderer.shadowMap.enabled, 'shadow map enabled');
+  ok(sun.castShadow, 'sun casts shadows');
+
+  // the shadow camera is in light space; check its half-extent covers the plot diagonal
+  sun.updateMatrixWorld(true);
+  const dx = Math.abs(sun.position.x - lv.w / 2), dz = Math.abs(sun.position.z - lv.h / 2);
+  const halfSpan = Math.min(s.right, s.top);
+  const need = Math.hypot(lv.w, lv.h) / 2;
+  ok(halfSpan >= need, `shadow camera covers the plot (half-extent ${halfSpan.toFixed(1)} >= ${need.toFixed(1)} needed)`);
+
+  const lightDist = Math.hypot(dx, sun.position.y, dz);
+  ok(s.far > lightDist, `shadow far plane is beyond the plot (far ${s.far.toFixed(0)} > dist ${lightDist.toFixed(0)})`);
+  ok(s.near > 0 && s.near < lightDist, 'shadow near plane is sane');
+
+  let casters = 0, receivers = 0;
+  api.scene.traverse((o) => { if (o.castShadow) casters++; if (o.receiveShadow) receivers++; });
+  ok(casters > 5, `things cast shadows (${casters})`);
+  ok(receivers > 0, `something receives them (${receivers})`);
+
+  // scene.background must not be a flat colour equal to the ground, the old bug
+  ok(!!api.scene.background && api.scene.background.isTexture, 'background is a sky gradient, not a flat wash');
+
+  // animation must not throw and must move parts
+  const before = [];
+  api.gMachines.children.forEach((g) => { const a = g.userData.anim; if (a && a.drum) before.push(a.drum.rotation.x); });
+  api.animateMachines(3.0);
+  ok(true, 'animateMachines runs without throwing');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 1400);
+
+/* --- port placement must survive rotation ---
+   The renderer now rotates each machine group, so port meshes are children in
+   local space. If local and world port maths ever disagree, belts silently attach
+   to the wrong face. Compare the rendered mesh position against portsOf. */
+setTimeout(() => {
+  const THREE = require('three');
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- port placement vs rotation ---');
+
+  api.loadLevel(3);
+  for (const rot of [0, 1, 2, 3]) {
+    const e = api.addEntity('constructor', 8, 8, rot);
+    e.recipe = 'plate';
+    api.buildMachines();
+    api.scene.updateMatrixWorld(true);
+    const want = api.portsOf(e).out[0];
+    // find the group for this entity and its output port child
+    let got = null;
+    for (const g of api.gMachines.children) {
+      if (g.userData.ent !== e) continue;
+      g.updateMatrixWorld(true);
+      const lp = api.localPorts(e).out[0];
+      const v = new THREE.Vector3(lp.x, 0.34, lp.z);
+      g.localToWorld(v);
+      got = { x: v.x, z: v.z };
+    }
+    const d = got ? Math.hypot(got.x - want.x, got.z - want.z) : Infinity;
+    ok(d < 1e-6, `rot ${rot * 90}deg: rendered output port matches portsOf (off by ${d.toExponential(1)})`);
+    // and the four rotations must not all land in the same place
+    api.removeEntityById(e.id);
+  }
+  console.log(`\n${p} passed, ${f} failed`);
+}, 1900);
