@@ -116,7 +116,7 @@ const body = blocks[blocks.length-1];
 const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet','LEVELS','MACHINES','groundAt','handleTap','portsOf','freeOutPort','commitStroke','beltMetres','computeCrossings','entAt','setTool','frame','score','updateLabels',
   'simplify','chaikin','resample','minRadius','segHit','routeBlocked','arcTable','MIN_RADIUS','canPlace',
   'sun','renderer','animateMachines','updateStatus','buildStatus','gMachines','BELT_TEX','BELT_SPEED',
-  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS','smoothPath','buildPath','smoothToRadius','MIN_RADIUS','SMOOTH_CAPS','ribbon','BELT_HW','RAIL_HW','BELT_TEX_PERIOD','gBelts','arcTable','updateJams','JAM_SPACING','itemMeshes','updateItems','roomy','resolveFlow'];
+  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS','smoothPath','buildPath','smoothToRadius','MIN_RADIUS','SMOOTH_CAPS','ribbon','BELT_HW','RAIL_HW','BELT_TEX_PERIOD','gBelts','arcTable','advanceBelts','beltHasRoom','queuedOn','JAM_SPACING','itemMeshes','updateItems','roomy','resolveFlow'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
@@ -816,15 +816,16 @@ setTimeout(() => {
   console.log(`\n${p} passed, ${f} failed`);
 }, 5900);
 
-/* --- a half-built line fills from the front ---
-   Each machine works until its own output belt is full, then blocks, and the jam
-   walks backwards. Previously nothing moved at all until the line reached the
-   depot, which told the player their machines were broken. */
+/* --- items on a belt form a queue without glitching ---
+   The bug this replaces: a moving stream and a packed queue were drawn from
+   different maths, so an arriving item slid through the queue and then snapped
+   backwards to a lattice position. The invariants below make that impossible to
+   reintroduce — items are simulated, ordered, and spaced. */
 setTimeout(() => {
   const api = globalThis.__api;
   let p = 0, f = 0;
   const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
-  console.log('\n--- half-built line fills up ---');
+  console.log('\n--- belt queues ---');
 
   api.loadLevel(0);
   const lv = api.LEVELS[0];
@@ -839,41 +840,56 @@ setTimeout(() => {
     globalThis.__setStroke(a, Math.max(0, api.freeOutPort(a)));
     api.commitStroke(pts, p1);
   };
-  paint(m, sm);                      // miner -> smelter, smelter output unconnected
+  paint(m, sm);                      // smelter output unconnected: the belt will back up
   api.computeCrossings(); api.resolve();
-
   const link = api.links()[0];
-  ok(!!link && link.item === 'ore', 'a belt carries ore from the miner');
-  ok((link.flow || 0) > 29, `the miner works immediately: ${(link.flow || 0).toFixed(0)}/min onto the belt`);
-  ok(m.state === 'running', `and reads as running, not blocked (${m.state})`);
-  ok((link.drain || 0) < 1e-6, 'the smelter cannot take any of it, having nowhere to send ingots');
 
   let t = performance.now();
-  const run = (secs) => { for (let i = 0; i < secs / 0.04; i++) { t += 40; api.frame(t); } };
+  let worstGap = Infinity, everOutOfOrder = false, everPastEnd = false, everNegative = false;
+  const checkFrame = () => {
+    const it = link.items || [];
+    for (let i = 0; i < it.length; i++) {
+      if (it[i] > link.length + 1e-6) everPastEnd = true;
+      if (it[i] < -1e-6) everNegative = true;
+      if (i > 0) {
+        const gap = it[i - 1] - it[i];
+        if (gap < -1e-9) everOutOfOrder = true;       // an item overtook the one ahead
+        worstGap = Math.min(worstGap, gap);
+      }
+    }
+  };
+  /* run long enough to fill the belt completely, checking every single frame */
+  for (let i = 0; i < 900; i++) { t += 40; api.frame(t); checkFrame(); }
 
-  run(link.length / api.BELT_SPEED + 0.5);
-  const early = link.jamLen || 0;
-  run(30);
-  const later = link.jamLen || 0;
-  ok(later > early, `ore piles up against the far end (${early.toFixed(2)} m -> ${later.toFixed(2)} m)`);
-  ok(later >= link.length - 0.1, 'until the belt is completely full');
-  ok((link.flow || 0) < 1e-6 && m.state === 'blocked',
-    `only then does the miner block (${(link.flow || 0).toFixed(0)}/min, ${m.state})`);
+  ok((link.items || []).length > 3, `the belt carries a queue (${(link.items || []).length} items)`);
+  ok(!everOutOfOrder, 'no item ever overtakes the one ahead of it');
+  ok(worstGap >= api.JAM_SPACING - 1e-6,
+    `nothing ever gets closer than the packed spacing (worst gap ${worstGap.toFixed(3)} m vs ${api.JAM_SPACING})`);
+  ok(!everPastEnd, 'no item ever runs off the end of the belt');
+  ok(!everNegative, 'no item ever ends up behind the start');
+  ok(!api.beltHasRoom(link), 'the belt reports itself full at the input end');
+  ok(m.state === 'blocked', `and the miner blocks once it is (${m.state})`);
+  ok(api.queuedOn(link) > 3, `the inspector can report the queue length (${api.queuedOn(link)} waiting)`);
 
-  api.updateItems(api.getClock());
-  ok(api.itemMeshes.ore.count > 0, `and the ore is visible on the belt (${api.itemMeshes.ore.count} items)`);
+  /* positions must be monotonic in time for a given item, i.e. no teleporting back */
+  const before = (link.items || []).slice();
+  t += 40; api.frame(t);
+  const after = (link.items || []).slice();
+  const n = Math.min(before.length, after.length);
+  let jumped = false;
+  for (let i = 0; i < n; i++) if (after[i] + 1e-9 < before[i] - 1e-9) jumped = true;
+  ok(!jumped, 'no item moves backwards between frames');
 
-  /* now give the smelter somewhere to send ingots */
+  /* connect it up and the queue must start moving off the end */
   const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
   paint(sm, depot);
   api.computeCrossings(); api.resolve();
-  run(8);
-  ok((link.flow || 0) > 29, `ore flows again once the line is complete (${(link.flow || 0).toFixed(0)}/min)`);
-  ok((link.drain || 0) > 29, `and the smelter is consuming it (${(link.drain || 0).toFixed(0)}/min)`);
-  ok(sm.f > 0.99, `the smelter is working (${(sm.f * 100).toFixed(0)}%)`);
-  /* arrival equals removal, so the backlog holds its length rather than vanishing.
-     That is the honest steady state: it only shrinks if the far end outpaces the near end. */
-  ok(Math.abs((link.jamLen || 0) - later) < 0.4, 'the backlog holds steady rather than evaporating');
+  const queuedBefore = api.queuedOn(link);
+  for (let i = 0; i < 200; i++) { t += 40; api.frame(t); checkFrame(); }
+  ok(worstGap >= api.JAM_SPACING - 1e-6, 'spacing still holds while the queue is draining');
+  ok(api.queuedOn(link) < queuedBefore || (link.drain || 0) > 29,
+    `material starts leaving the belt (drain ${(link.drain || 0).toFixed(0)}/min)`);
+  ok(sm.f > 0.99, `and the smelter runs (${(sm.f * 100).toFixed(0)}%)`);
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 6400);

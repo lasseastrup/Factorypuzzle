@@ -257,7 +257,7 @@ const RAIL_HW = 0.035;         // side rails are strips, not more belt
 const BELT_TEX_PERIOD = 0.38;  // metres per cleat
 const JAM_SPACING = 0.42;      // packed spacing when a belt has backed up
 const BELT_Y = 0.075;
-const MAX_ITEMS_PER_TYPE = 500;
+const MAX_ITEMS_PER_TYPE = 900;   // a fully packed factory can hold a lot of one item
 const CLEARANCE = 0.34;        // how close a belt may pass a machine or rock
 const STROKE_MIN_STEP = 0.16;  // sampling distance while painting
 const SIMPLIFY_EPS = 0.24;     // how much finger wobble to discard
@@ -1321,24 +1321,67 @@ function posAt(l, s) {
   };
 }
 
-/* A belt whose destination will not take delivery still has material put onto it.
-   It backs up: items pile against the blocked end and stop. Rendering nothing in
-   that case is worse than wrong, it is misleading — the player sees an empty belt
-   and assumes the miner is idle, when the truth is the far end is the problem. */
-function updateJams(dt) {
+/* ---- items on belts ----
+   Each belt keeps an ordered list of item positions along its own arc length,
+   front-most first. Every frame each item advances at belt speed but may not come
+   closer than JAM_SPACING to the one ahead, so a queue forms by itself where the
+   line is blocked.
+
+   The previous version modelled a moving stream and a packed queue as two separate
+   things, drawn from different maths: a lattice locked to absolute time, and a
+   block of items measured back from the belt's end. Nothing kept the two in step,
+   so an arriving item slid over the queue and then snapped to a lattice position up
+   to one whole spacing further back. Simulating the items directly removes the seam
+   because there is no longer a seam — there is one list. */
+function advanceBelts(dt) {
   for (const l of links) {
-    const flow = l.flow || 0, drain = l.drain || 0;
-    if (l.jamLen == null) l.jamLen = 0;
-    const filled = isFinite(l.startT) && clockT >= l.startT + l.length / BELT_SPEED;
-    if (!filled) continue;
-    /* Pure conservation: the queue is however much has arrived and not left. When
-       arrival equals removal it holds its length — it does not quietly drain. An
-       earlier version shrank it whenever nothing was accumulating, which made a
-       blocked belt oscillate between full and empty once a frame. */
-    const net = (flow - drain) / 60 * JAM_SPACING;      // metres per second
-    if (net > 1e-6) l.jamLen = Math.min(l.length, l.jamLen + net * dt);
-    else if (net < -1e-6) l.jamLen = Math.max(0, l.jamLen + net * dt);
+    if (!l.items) l.items = [];
+    if (l.spawnAcc == null) l.spawnAcc = 0;
+    if (l.drainAcc == null) l.drainAcc = 0;
+    const len = l.length;
+    const items = l.items;
+
+    /* the destination removes material at the rate it actually consumes */
+    l.drainAcc = Math.min(2, l.drainAcc + ((l.drain || 0) / 60) * dt);
+    while (items.length && items[0] >= len - 1e-3 && l.drainAcc >= 1) {
+      items.shift();
+      l.drainAcc -= 1;
+    }
+
+    /* advance, never overtaking the item ahead */
+    for (let i = 0; i < items.length; i++) {
+      const limit = i === 0 ? len : items[i - 1] - JAM_SPACING;
+      items[i] = Math.min(items[i] + BELT_SPEED * dt, limit);
+      if (items[i] < 0) items[i] = 0;
+    }
+
+    /* put new material on at the source, if there is room at the back */
+    const live = isFinite(l.startT) && clockT >= l.startT;
+    l.spawnAcc = Math.min(3, l.spawnAcc + (live ? ((l.flow || 0) / 60) * dt : 0));
+    while (l.spawnAcc >= 1) {
+      const back = items.length ? items[items.length - 1] : Infinity;
+      if (back < JAM_SPACING) break;          /* belt is full at the input end */
+      if (items.length >= Math.ceil(len / JAM_SPACING) + 1) break;
+      items.push(0);
+      l.spawnAcc -= 1;
+    }
   }
+}
+
+/* room at the input end is what decides whether a source can keep pushing */
+function beltHasRoom(l) {
+  if (!l.items || !l.items.length) return true;
+  return l.items[l.items.length - 1] >= JAM_SPACING;
+}
+/* how much of the belt is standing still, for the inspector */
+function queuedOn(l) {
+  if (!l.items || !l.items.length) return 0;
+  let n = 0;
+  for (let i = 0; i < l.items.length; i++) {
+    const limit = i === 0 ? l.length : l.items[i - 1] - JAM_SPACING;
+    if (l.items[i] >= limit - 1e-3) n++; else break;
+  }
+  return n;
 }
 
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _sc = new THREE.Vector3(1, 1, 1),
@@ -1346,49 +1389,21 @@ const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _sc = new THREE.Vec
 function updateItems(t) {
   const counts = {};
   for (const k of Object.keys(itemMeshes)) counts[k] = 0;
-  {
-    for (const l of links) {
-      if (!l.item) continue;
-      const mesh = itemMeshes[l.item];
-      if (!mesh) continue;
-      const len = l.length;
-      const jam = Math.min(len, l.jamLen || 0);
-      const freeLen = Math.max(0, len - jam);
-      const lie = l.item === 'rod' || l.item === 'screw';   /* cylinders lie down */
-
-      const place = (s) => {
-        if (counts[l.item] >= MAX_ITEMS_PER_TYPE) return false;
-        const p = posAt(l, s);
-        const q = posAt(l, Math.min(len, s + 0.25));
-        const head = Math.atan2(q.x - p.x, q.z - p.z);
-        _e.set(lie ? Math.PI / 2 : 0, head, 0, 'YXZ');
-        _q.setFromEuler(_e);
-        _v.set(p.x, p.y, p.z);
-        _m.compose(_v, _q, _sc);
-        mesh.setMatrixAt(counts[l.item]++, _m);
-        return true;
-      };
-
-      /* Queue packed against the far end. If the destination is consuming, it
-         creeps forward at the rate material leaves rather than sitting frozen —
-         a backed-up belt that is slowly draining should look like it. */
-      if (jam > 1e-4) {
-        const creep = ((l.drain || 0) / 60) * JAM_SPACING * t;
-        const phase = ((creep % JAM_SPACING) + JAM_SPACING) % JAM_SPACING;
-        for (let s = len - JAM_SPACING + phase; s > freeLen; s -= JAM_SPACING) if (!place(s)) break;
-      }
-
-      /* and whatever is still moving, on the stretch that is not yet queued */
-      const moving = (l.flow || 0) > 1e-4 ? l.flow : ((l.want || 0) > 1e-4 && jam < len ? l.want : 0);
-      if (moving > 1e-4) {
-        /* Spacing is never adjusted to fit a budget: shrinking it would make the
-           belt appear to carry more than it does. */
-        const spacing = BELT_SPEED * 60 / moving;
-        const front = (t - (l.startT || 0)) * BELT_SPEED;
-        if (front > 0) {
-          for (let s = front % spacing; s <= Math.min(freeLen, front); s += spacing) if (!place(s)) break;
-        }
-      }
+  for (const l of links) {
+    if (!l.item || !l.items || !l.items.length) continue;
+    const mesh = itemMeshes[l.item];
+    if (!mesh) continue;
+    const lie = l.item === 'rod' || l.item === 'screw';   /* cylinders lie down */
+    for (const s of l.items) {
+      if (counts[l.item] >= MAX_ITEMS_PER_TYPE) break;
+      const p = posAt(l, s);
+      const q = posAt(l, Math.min(l.length, s + 0.25));
+      const head = Math.atan2(q.x - p.x, q.z - p.z);
+      _e.set(lie ? Math.PI / 2 : 0, head, 0, 'YXZ');
+      _q.setFromEuler(_e);
+      _v.set(p.x, p.y, p.z);
+      _m.compose(_v, _q, _sc);
+      mesh.setMatrixAt(counts[l.item]++, _m);
     }
   }
   for (const k of Object.keys(itemMeshes)) {
@@ -1404,7 +1419,7 @@ function updateItems(t) {
    makes a half-built line fill from the front instead of sitting dead: each machine
    works until its own output belt is full, then blocks, and the jam walks
    backwards. */
-const roomy = (l) => (l.jamLen || 0) < l.length - 0.05;
+const roomy = (l) => beltHasRoom(l);
 
 /* Re-solve because the belts filled up, not because the player changed anything.
    Keeps the schedule and the hold timer intact. */
@@ -1658,6 +1673,8 @@ function showBeltInspector(l) {
     + '<div class="row"><span>Capacity</span><span>' + l.cap + '/min</span></div>'
     + '<div class="row"><span>Length</span><span>' + l.length.toFixed(1) + ' m</span></div>';
   if (l.bumps.length) html += '<div class="row"><span>Crossings</span><span>' + l.bumps.length + ' over</span></div>';
+  const q = queuedOn(l);
+  if (q) html += '<div class="row"><span>Queued</span><span>' + q + ' item' + (q === 1 ? '' : 's') + ' waiting</span></div>';
   {
     html += '<div class="row"><span>Carrying</span><span>' + (l.item ? ITEMS[l.item].short : '—') + '</span></div>'
       + '<div class="row"><span>Load</span><span>' + fmt(l.flow || 0) + ' / ' + l.cap + '</span></div>';
@@ -2111,6 +2128,7 @@ function frame(now) {
      level; breaking it resets the timer. */
   /* When a belt fills or drains the flow picture changes, so re-solve — but only on
      the transition, not every frame. */
+  advanceBelts(dt);
   const sig = links.map((l) => (roomy(l) ? '1' : '0')).join('');
   if (sig !== roomSig) { roomSig = sig; resolveFlow(); }
 
@@ -2130,7 +2148,6 @@ function frame(now) {
   }
 
   updateStatus();
-  updateJams(dt);
   /* The surface must scroll at exactly the speed items travel, or the belt looks
      like it is slipping under its own cargo. One period of texture is
      BELT_TEX_PERIOD metres, so offset advances BELT_SPEED / period per second. */
