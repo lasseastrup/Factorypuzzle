@@ -301,7 +301,12 @@ These are genuinely in tension: the ore-optimal solution usually needs more mach
 | Delete | long-press, or dedicated erase mode for bulk |
 | Inspect | tap |
 
-Camera is a fixed-pitch top-down (~60°) orthographic-ish view. **No free orbit** — it destroys the readability of belt paths and makes drag-to-place ambiguous. Snapped 90° rotation only.
+Camera is orthographic with **three fixed tilt steps — 36°, 44°, 54° above the horizon, defaulting to 44°**. A shallower angle shows the solidity of the world and makes the over-under at belt crossings legible; a steeper one keeps belt routes clear because tall machines occlude less. Still **no free orbit** — that destroys the readability of belt paths and makes drag-to-place ambiguous. Yaw is snapped to 90° only.
+
+Two consequences of an oblique view that are easy to get wrong:
+
+- **Hit testing must use the machine meshes, not the ground plane.** At 44° the visible top of a miner's drill tower sits about 2 m behind its footprint, so a ground-plane raycast misses the thing the player is obviously pointing at. Placement still uses the ground, because there the player is indicating a position rather than an object.
+- **Panning divides by sin(pitch), not cos.** A ground step along the view's depth axis projects onto the screen vertical by sin(pitch). Getting this wrong makes vertical panning feel wrong in a way that is hard to name and easy to ship.
 
 The bottom bar is a horizontally scrolling machine palette with the module drawer as a separate tab. Everything reachable one-thumbed.
 

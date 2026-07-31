@@ -137,6 +137,7 @@
   <button class="tbtn" data-tool="erase">Erase</button>
   <button class="tbtn" id="rotBtn">Turn 90&deg;</button>
   <button class="tbtn" id="camBtn">Rotate view</button>
+  <button class="tbtn" id="tiltBtn">Tilt</button>
 </div>
 <div id="ruler"></div>
 <div id="insp"></div>
@@ -793,7 +794,11 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
-const PITCH = 58 * Math.PI / 180;
+/* Camera elevation above the horizon. Lower is more three-quarter and shows the
+   solidity of the world; higher keeps belt routes legible because tall machines
+   occlude less. Three fixed steps, no free orbit (§10). */
+const PITCH_STEPS = [36, 44, 54].map((d) => d * Math.PI / 180);
+let pitchIdx = 1, pitch = PITCH_STEPS[pitchIdx], pitchTarget = pitch;
 let yaw = 0, yawTarget = 0, zoom = 34, camCenter = new THREE.Vector3(7, 0, 7);
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
 
@@ -807,9 +812,9 @@ function layoutCamera() {
 function placeCamera() {
   const d = 100;
   camera.position.set(
-    camCenter.x + Math.sin(yaw) * Math.cos(PITCH) * d,
-    Math.sin(PITCH) * d,
-    camCenter.z + Math.cos(yaw) * Math.cos(PITCH) * d
+    camCenter.x + Math.sin(yaw) * Math.cos(pitch) * d,
+    Math.sin(pitch) * d,
+    camCenter.z + Math.cos(yaw) * Math.cos(pitch) * d
   );
   camera.up.set(0, 1, 0);
   camera.lookAt(camCenter);
@@ -921,7 +926,7 @@ function buildPad() {
   gPad.add(new THREE.LineSegments(tg, new THREE.LineBasicMaterial({ color: 0x8d8b7d })));
 
   /* ---- terrain the slab sits in ---- */
-  const PAD = 34;
+  const PAD = 60;   /* wide enough that a shallow pitch never shows the terrain edge */
   const seg = 44;
   const gw = L.w + PAD * 2, gh = L.h + PAD * 2;
   const ground = new THREE.PlaneGeometry(gw, gh, seg, seg);
@@ -954,7 +959,8 @@ function buildPad() {
   /* ---- scattered boulders and scrub outside the plot ---- */
   const rr = rng(90210);
   const bould = [], tuft = [];
-  for (let i = 0; i < 200; i++) {
+  const scatter = Math.round(200 * ((L.w + PAD * 2) * (L.h + PAD * 2)) / 6000);
+  for (let i = 0; i < scatter; i++) {
     const x = -PAD + rr() * (L.w + PAD * 2), z = -PAD + rr() * (L.h + PAD * 2);
     const outside = x < -2.4 || z < -2.4 || x > L.w + 2.4 || z > L.h + 2.4;
     if (!outside) continue;
@@ -1179,11 +1185,11 @@ function finishStroke(raw, a, aPort, b, bPort) {
   return out;
 }
 
-function commitStroke(raw, endPoint) {
+function commitStroke(raw, endPoint, pickedEnd) {
   const a = stroke.fromEnt;
   const item = outItemOf(a);
   /* find the target: whatever machine the stroke ended on or nearest to */
-  let b = entAt(endPoint);
+  let b = (pickedEnd && pickedEnd !== a) ? pickedEnd : entAt(endPoint);
   if (!b) {
     let best = null, bd = SNAP_RADIUS * SNAP_RADIUS;
     for (const e of ents) {
@@ -2007,6 +2013,21 @@ function resetView() {
   layoutCamera();
 }
 
+/* At an oblique angle the visible top of a tall machine sits well behind its
+   footprint on the ground, so a ground-plane raycast misses it. Pick against the
+   machine meshes instead. Placement still uses the ground, because there the
+   player is indicating a position rather than an object. */
+function machineAtScreen(cx, cy) {
+  raycaster.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), camera);
+  const hits = raycaster.intersectObjects(gMachines.children, true);
+  for (const hit of hits) {
+    let o = hit.object;
+    while (o && !(o.userData && o.userData.ent)) o = o.parent;
+    if (o && o.userData.ent) return o.userData.ent;
+  }
+  return null;
+}
+
 function groundAt(cx, cy) {
   raycaster.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), camera);
   const hit = new THREE.Vector3();
@@ -2030,6 +2051,8 @@ cv.addEventListener('pointerdown', (ev) => {
   if (tool === 'belt' && g) {
     /* begin a stroke at the nearest free output port */
     let bestE = null, bestP = -1, bd = SNAP_RADIUS * SNAP_RADIUS;
+    const picked = machineAtScreen(ev.clientX, ev.clientY);
+    if (picked && freeOutPort(picked) >= 0) { bestE = picked; bestP = freeOutPort(picked); bd = -1; }
     for (const e of ents) {
       const free = freeOutPort(e);
       if (free < 0) continue;
@@ -2076,7 +2099,10 @@ cv.addEventListener('pointermove', (ev) => {
   if (moved > 9) dragMode = 'pan';
   if (dragMode === 'pan') {
     const scale = zoom / innerHeight;
-    const rx = -dx * scale, rz = -dy * scale / Math.cos(PITCH);
+    /* A ground step along the view's depth axis projects onto the screen vertical
+       by sin(pitch), so that is the divisor. This used to be cos(pitch), which
+       made vertical panning 1.6x too fast at the old 58 degrees. */
+    const rx = -dx * scale, rz = -dy * scale / Math.sin(pitch);
     const s = Math.sin(yaw), c = Math.cos(yaw);
     /* keep the plot within reach: panning into empty terrain is disorienting and
        there is nothing out there to look at */
@@ -2096,13 +2122,13 @@ cv.addEventListener('pointerup', (ev) => {
   pointers.delete(ev.pointerId);
   if (painting) {
     clear(gGhost);
-    if (stroke.pts.length >= 1 && g) commitStroke(stroke.pts, g);
+    if (stroke.pts.length >= 1 && g) commitStroke(stroke.pts, g, machineAtScreen(ev.clientX, ev.clientY));
     else toast('Drag from one machine to another to lay a belt.');
     stroke = null;
     if (!pointers.size) { dragMode = null; pinched = false; }
     return;
   }
-  if (wasTap && g) handleTap(g);
+  if (wasTap && g) handleTap(g, ev.clientX, ev.clientY);
   rebaseGesture();
 });
 cv.addEventListener('pointercancel', (ev) => {
@@ -2130,7 +2156,7 @@ function drawStrokePreview() {
   if (g) gGhost.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55, side: THREE.DoubleSide })));
 }
 
-function handleTap(g) {
+function handleTap(g, cx, cy) {
   if (tool === 'place' && pickedType) {
     const err = canPlace(pickedType, g.x, g.z, pickedRot);
     if (err) return toast(err);
@@ -2140,13 +2166,13 @@ function handleTap(g) {
     return;
   }
   if (tool === 'erase') {
-    const e = entAt(g);
+    const e = machineAtScreen(cx, cy) || entAt(g);
     if (e && MACHINES[e.type].kind !== 'sink') { removeEntity(e); computeCrossings(); resolve(); return; }
     const l = beltAt(g);
     if (l) { links = links.filter((x) => x !== l); computeCrossings(); resolve(); return; }
     return;
   }
-  const e = entAt(g);
+  const e = machineAtScreen(cx, cy) || entAt(g);
   if (e) { selected = e; buildMachines(); showInspector(e); return; }
   const l = beltAt(g);
   if (l) { selected = null; buildMachines(); showBeltInspector(l); return; }
@@ -2187,6 +2213,11 @@ $('#rotBtn').onclick = () => {
   }
 };
 $('#camBtn').onclick = () => { yawTarget += Math.PI / 2; };
+$('#tiltBtn').onclick = () => {
+  pitchIdx = (pitchIdx + 1) % PITCH_STEPS.length;
+  pitchTarget = PITCH_STEPS[pitchIdx];
+  toast('Tilt ' + Math.round(PITCH_STEPS[pitchIdx] * 180 / Math.PI) + '\u00b0');
+};
 $('#run').onclick = () => (phase === 'edit' ? startRun() : stopRun());
 $('#plannerBtn').onclick = () => { plannerOn = !plannerOn; $('#plannerBtn').classList.toggle('on', plannerOn); };
 $('#clearBtn').onclick = () => {
@@ -2269,6 +2300,7 @@ function frame(now) {
   last = now;
   clock += dt;
   if (Math.abs(yawTarget - yaw) > 1e-4) yaw += (yawTarget - yaw) * Math.min(1, dt * 9);
+  if (Math.abs(pitchTarget - pitch) > 1e-4) pitch += (pitchTarget - pitch) * Math.min(1, dt * 8);
   if (!cameraIsSane()) { resetView(); toast('View reset.'); }
   placeCamera();
   if (phase === 'running') {

@@ -52,7 +52,7 @@ function El(tag) {
 }
 
 const ids = {};
-for (const id of ['labels', 'docket', 'lvId', 'lvName', 'lvHint', 'quotas', 'levelBar',
+for (const id of ['tiltBtn','labels', 'docket', 'lvId', 'lvName', 'lvHint', 'quotas', 'levelBar',
                   'insp', 'trayScroll', 'bar2', 'run', 'plannerBtn', 'clearBtn',
                   'report', 'rcard', 'toast', 'tools', 'tray', 'rotBtn', 'camBtn']) {
   ids[id] = El('div');
@@ -113,11 +113,11 @@ const body = blocks[blocks.length-1];
 const exports_ = ['loadLevel','addEntity','resolve','startRun','scene','camera','LEVELS','MACHINES','groundAt','handleTap','portsOf','freeOutPort','commitStroke','beltMetres','computeCrossings','entAt','setTool','frame','validate','score','updateLabels',
   'simplify','chaikin','resample','minRadius','segHit','routeBlocked','arcTable','MIN_RADIUS','canPlace',
   'sun','renderer','animateMachines','updateStatus','buildStatus','gMachines','BELT_TEX','BELT_SPEED',
-  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView'];
+  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
-  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getResult: function(){return result;},'
+  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
@@ -566,3 +566,72 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 3900);
+
+/* --- oblique camera ---
+   Lowering the pitch displaces the visible top of a tall machine well behind its
+   footprint, so ground-plane hit testing stops working. And the pan mapping has to
+   use sin(pitch), not cos: it was cos, making vertical panning 1.6x too fast. */
+setTimeout(() => {
+  const THREE = require('three');
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- oblique camera ---');
+
+  api.loadLevel(0);
+  api.frame(performance.now());
+  ok(Math.abs(api.getPitch() - api.PITCH_STEPS[1]) < 1e-6,
+    `default tilt is ${Math.round(api.PITCH_STEPS[1] * 180 / Math.PI)} deg`);
+
+  /* place a miner on the node and aim at the TOP of its drill tower */
+  const lv = api.LEVELS[0];
+  const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  api.buildMachines();
+  api.scene.updateMatrixWorld(true);
+  api.frame(performance.now());
+
+  const topOfTower = new THREE.Vector3(m.x, 1.9, m.z);
+  const proj = topOfTower.clone().project(api.camera);
+  const sx = (proj.x * 0.5 + 0.5) * 390, sy = (-proj.y * 0.5 + 0.5) * 844;
+
+  const groundPt = api.groundAt(sx, sy);
+  const groundHit = api.entAt(groundPt);
+  const meshHit = api.machineAtScreen(sx, sy);
+
+  const offset = groundPt ? Math.hypot(groundPt.x - m.x, groundPt.z - m.z) : -1;
+  ok(offset > 1.0, `the tower top maps to ground ${offset.toFixed(2)} m from the footprint`);
+  ok(groundHit !== m, 'ground-plane hit testing misses it, as expected at this angle');
+  ok(meshHit === m, 'mesh picking finds the machine you actually tapped');
+
+  /* pan mapping must match the geometry */
+  for (const deg of [36, 44, 54]) {
+    api.setPitch(deg * Math.PI / 180);
+    api.frame(performance.now());
+    const cv = api.renderer.domElement;
+    api.setZoom(24);
+    const before = api.getCam();
+    cv.fire('pointerdown', { pointerId: 1, clientX: 200, clientY: 400 });
+    cv.fire('pointermove', { pointerId: 1, clientX: 200, clientY: 300 });   // 100px up
+    const after = api.getCam();
+    cv.fire('pointerup', { pointerId: 1, clientX: 200, clientY: 300 });
+    const moved = Math.hypot(after.x - before.x, after.z - before.z);
+    const expect = 100 * (24 / 844) / Math.sin(deg * Math.PI / 180);
+    ok(Math.abs(moved - expect) < 0.02,
+      `${deg} deg: 100px drag pans ${moved.toFixed(2)} m, geometry says ${expect.toFixed(2)} m`);
+  }
+  /* at the shallowest tilt and furthest zoom the terrain must still fill the
+     frame, or the player sees the edge of the world */
+  const shallow = api.PITCH_STEPS[0];
+  for (let i = 0; i < api.LEVELS.length; i++) {
+    const l = api.LEVELS[i];
+    const viewH = Math.max(l.w, l.h) * 2.4;          // zoomMax
+    const terrainOnScreen = (l.h + 120) * Math.sin(shallow);
+    if (i === api.LEVELS.length - 1 || terrainOnScreen <= viewH) {
+      ok(terrainOnScreen > viewH,
+        `${l.id}: terrain covers the frame at min tilt / max zoom (${terrainOnScreen.toFixed(0)} > ${viewH.toFixed(0)})`);
+    }
+  }
+  api.setPitch(api.PITCH_STEPS[1]);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 4400);
