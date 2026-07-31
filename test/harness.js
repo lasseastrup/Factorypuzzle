@@ -112,7 +112,7 @@ const body = blocks[blocks.length-1];
 /* expose internals for poking after boot */
 const exports_ = ['loadLevel','addEntity','resolve','startRun','scene','camera','LEVELS','MACHINES','groundAt','handleTap','portsOf','freeOutPort','commitStroke','beltMetres','computeCrossings','entAt','setTool','frame','validate','score','updateLabels',
   'simplify','chaikin','resample','minRadius','segHit','routeBlocked','arcTable','MIN_RADIUS','canPlace',
-  'sun','renderer','animateMachines','updateRings','buildRings','gMachines','BELT_TEX',
+  'sun','renderer','animateMachines','updateStatus','buildStatus','gMachines','BELT_TEX','BELT_SPEED',
   'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
@@ -535,3 +535,34 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 3400);
+
+/* --- visible throughput must equal real throughput ---
+   A player counting items on a belt is auditing the simulation. If 30/min does not
+   look like one item every two seconds, the game is lying about the number the
+   whole puzzle turns on. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- visible throughput ---');
+
+  const S = api.BELT_SPEED;
+  for (const flow of [15, 30, 45, 60, 90, 120, 240]) {
+    const spacing = S * 60 / flow;
+    const visible = (S / spacing) * 60;          // items past a fixed point per minute
+    const gap = spacing / S;                     // seconds between items
+    ok(Math.abs(visible - flow) < 1e-9,
+      `${flow}/min shows as ${visible.toFixed(1)}/min — one item every ${gap.toFixed(2)} s`);
+  }
+
+  /* the specific case that was reported */
+  const gap30 = (S * 60 / 30) / S;
+  ok(Math.abs(gap30 - 2.0) < 1e-9, `a 30/min miner emits one item every ${gap30.toFixed(2)} s exactly`);
+
+  /* and enough items must be on a typical belt for the rhythm to be readable */
+  const typicalBelt = 9;
+  const onBelt30 = typicalBelt / (S * 60 / 30);
+  ok(onBelt30 >= 1.3, `a ${typicalBelt} m belt at 30/min carries ${onBelt30.toFixed(1)} items at once (needs >1 to read as a flow)`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 3900);

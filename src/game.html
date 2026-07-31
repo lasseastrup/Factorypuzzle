@@ -238,8 +238,14 @@ const STATE_COLOR = {
   blocked: 0xc2402f, stopped: 0x8b8f8a, idle: 0x8b8f8a, passive: 0x8b8f8a,
 };
 
-const BELT_SPEED = 4.2;        // m/s, tuned for spin-up budget (§5.1)
-const BELT_HW = 0.30;          // half width
+/* Visual belt speed is tuned, not derived (§5.1). The rate an item passes a point
+   is BELT_SPEED / spacing, and spacing is BELT_SPEED * 60 / flow, so the two
+   cancel and the visible rate always equals the real one no matter what this is
+   set to. Lowering it does not lie about throughput — it just spaces items closer
+   together and moves them slower, which is what makes 30/min legible as a pulse
+   every two seconds instead of a single object flashing past. */
+const BELT_SPEED = 2.8;        // m/s
+const BELT_HW = 0.21;          // half width
 const BELT_Y = 0.075;
 const MAX_ITEMS_PER_TYPE = 500;
 const CLEARANCE = 0.34;        // how close a belt may pass a machine or rock
@@ -1000,12 +1006,30 @@ function buildMachines() {
     });
 
     if (e === selected) {
-      const halo = new THREE.Mesh(
-        new THREE.RingGeometry(Math.max(b.ex, b.ez) + 0.18, Math.max(b.ex, b.ez) + 0.3, 40),
-        new THREE.MeshBasicMaterial({ color: 0x161d21, side: THREE.DoubleSide }));
-      halo.rotation.x = -Math.PI / 2;
-      halo.position.y = 0.04;
-      g.add(halo);
+      /* corner brackets rather than a ring: marks the footprint without adding
+         another big circle to the floor */
+      const bm = new THREE.MeshBasicMaterial({ color: 0x161d21 });
+      const ax = w / 2 + 0.1, az = d / 2 + 0.1, len = 0.36, th = 0.055;
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const a = new THREE.Mesh(new THREE.BoxGeometry(len, 0.02, th), bm);
+        a.position.set(sx * (ax - len / 2), 0.05, sz * az);
+        g.add(a);
+        const b2 = new THREE.Mesh(new THREE.BoxGeometry(th, 0.02, len), bm);
+        b2.position.set(sx * ax, 0.05, sz * (az - len / 2));
+        g.add(b2);
+      }
+    }
+
+    /* status lamp, on a short mast so it clears the body */
+    if (def.kind === 'machine' || def.kind === 'miner') {
+      const ly = LAMP_Y[e.type] || 1.2;
+      part(g, new THREE.CylinderGeometry(0.035, 0.035, 0.3, 6), MAT(DARK), -w / 2 + 0.2, ly - 0.15, d / 2 - 0.24, false);
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.115, 10, 8),
+        new THREE.MeshBasicMaterial({ color: 0x8b8f8a }));
+      lamp.position.set(-w / 2 + 0.2, ly + 0.04, d / 2 - 0.24);
+      lamp.visible = false;
+      g.add(lamp);
+      anim.lamp = lamp;
     }
 
     g.userData.anim = anim;
@@ -1014,56 +1038,31 @@ function buildMachines() {
   }
 }
 
-/* ---- efficiency rings ----
-   Built once per solve, not per frame. The previous version disposed and
-   recreated ring geometry inside the render loop, which is fine at five machines
-   and ruinous at fifty. Only the arc geometry is regenerated, and only when the
-   displayed percentage actually moves. */
-const ringFor = new Map();
-function buildRings() {
-  clear(gRings);
-  ringFor.clear();
-  if (phase === 'edit') return;
-  for (const e of ents) {
-    const def = MACHINES[e.type];
-    if (def.kind === 'splitter' || def.kind === 'merger' || def.kind === 'sink') continue;
-    const b = boxOf(e);
-    const r = Math.max(b.ex, b.ez) + 0.34;
-    const track = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.15, 46),
-      new THREE.MeshBasicMaterial({ color: 0x9fa298, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }));
-    track.rotation.x = -Math.PI / 2;
-    track.position.set(e.x, 0.045, e.z);
-    const fill = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.15, 46, 1, Math.PI / 2, -0.001),
-      new THREE.MeshBasicMaterial({ color: 0x888888, side: THREE.DoubleSide }));
-    fill.rotation.x = -Math.PI / 2;
-    fill.position.set(e.x, 0.055, e.z);
-    gRings.add(track, fill);
-    ringFor.set(e.id, { track, fill, r, shown: -1 });
-  }
-  updateRings();
-}
+/* ---- status lamps ----
+   These replace the rings that used to sit on the ground under every machine.
+   The rings read the efficiency arc at a glance but dominated the picture, and
+   there were as many big circles as machines. A small lamp on the machine keeps
+   the state visible — green running, amber starved, orange throttled, red
+   blocked — while the exact percentage lives in the planner overlay and the
+   inspector, which is where a number belongs anyway. */
+const LAMP_Y = { miner: 2.05, smelter: 2.05, constructor: 1.62, assembler: 1.05 };
+function buildStatus() { /* lamps are created with the machine bodies */ }
 
-function updateRings() {
-  for (const e of ents) {
-    const h = ringFor.get(e.id);
-    if (!h) continue;
-    const live = isLive(e);
-    h.track.visible = live;
-    h.fill.visible = live;
+function updateStatus() {
+  for (const g of gMachines.children) {
+    const e = g.userData.ent;
+    const lamp = g.userData.anim && g.userData.anim.lamp;
+    if (!e || !lamp) continue;
+    const live = phase !== 'edit' && isLive(e);
+    lamp.visible = live;
     if (!live) continue;
-    const frac = Math.max(0.001, Math.min(1, e.f || 0));
-    h.fill.material.color.setHex(STATE_COLOR[e.state] || 0x888888);
-    if (Math.abs(frac - h.shown) > 0.01) {
-      h.shown = frac;
-      h.fill.geometry.dispose();
-      h.fill.geometry = new THREE.RingGeometry(h.r, h.r + 0.15,
-        Math.max(3, Math.ceil(46 * frac)), 1, Math.PI / 2, -Math.PI * 2 * frac);
-    }
+    lamp.material.color.setHex(STATE_COLOR[e.state] || 0x8b8f8a);
   }
 }
+/* kept under the old names so callers do not have to care */
+const buildRings = buildStatus;
+const updateRings = updateStatus;
 
-/* one ribbon mesh for every belt, built by hand so it can carry vertex colours
-   and per-point elevation for the crossings */
 /* ---- conveyor geometry ----
    The belt surface carries a scrolling chevron texture. Because visual belt speed
    is a tuned constant (§5.1) rather than derived from throughput, every belt
@@ -1116,7 +1115,7 @@ function ribbon(list, colorFor, withUV) {
       pos.push(p.x + tz * BELT_HW, y, p.z - tx * BELT_HW);
       nrm.push(0, 1, 0, 0, 1, 0);
       col.push(c.r, c.g, c.b, c.r, c.g, c.b);
-      uv.push(arc[i] / 0.9, 0, arc[i] / 0.9, 1);
+      uv.push(arc[i] / 0.6, 0, arc[i] / 0.6, 1);
     }
     for (let i = 0; i < pts.length - 1; i++) {
       const a = base + i * 2;
@@ -1143,10 +1142,10 @@ function buildBelts() {
     c.setHex(tier.color);
     if (phase !== 'edit') {
       const load = Math.min(1, (l.flow || 0) / l.cap);
-      c.lerp(new THREE.Color(0xffffff), 0.14 + load * 0.5);
+      c.lerp(new THREE.Color(0xffffff), 0.02 + load * 0.34);
       if (l.saturated && l.overCapacity) c.setHex(0xc2402f);
     } else {
-      c.lerp(new THREE.Color(0xffffff), 0.2);
+      c.lerp(new THREE.Color(0x000000), 0.12);
     }
   });
   if (surface) {
@@ -1169,10 +1168,10 @@ function buildBelts() {
         let tx = b.x - a.x, tz = b.z - a.z;
         const tl = Math.hypot(tx, tz) || 1;
         tx /= tl; tz /= tl;
-        rp.push({ x: p.x + (-tz) * side * (BELT_HW + 0.045), z: p.z + tx * side * (BELT_HW + 0.045) });
+        rp.push({ x: p.x + (-tz) * side * (BELT_HW + 0.035), z: p.z + tx * side * (BELT_HW + 0.035) });
         ra.push(arc[i]);
       }
-      railGeo.push({ path: rp, arc: ra, bumps: l.bumps, tier: l.tier, off: 0.085 });
+      railGeo.push({ path: rp, arc: ra, bumps: l.bumps, tier: l.tier, off: 0.07 });
     }
     for (let s = 0.45; s < l.length; s += 1.5) legs.push({ l, s });
   }
@@ -1180,7 +1179,7 @@ function buildBelts() {
   if (railG) {
     /* lift the rails just above the belt surface */
     const p = railG.attributes.position;
-    for (let i = 0; i < p.count; i++) p.setY(i, p.getY(i) + 0.085);
+    for (let i = 0; i < p.count; i++) p.setY(i, p.getY(i) + 0.07);
     railG.attributes.position.needsUpdate = true;
     const m = new THREE.Mesh(railG, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
     m.castShadow = true;
@@ -1207,12 +1206,12 @@ function buildBelts() {
    Distinct shapes per type. An ore lump and an iron plate should be tellable
    apart while zoomed out, which colour alone does not manage. */
 const ITEM_GEO = {
-  ore:   () => new THREE.IcosahedronGeometry(0.15, 0),
-  ingot: () => new THREE.BoxGeometry(0.3, 0.13, 0.19),
-  plate: () => new THREE.BoxGeometry(0.34, 0.06, 0.26),
-  rod:   () => new THREE.CylinderGeometry(0.06, 0.06, 0.4, 7),
-  screw: () => new THREE.CylinderGeometry(0.05, 0.05, 0.17, 6),
-  reinf: () => new THREE.BoxGeometry(0.36, 0.1, 0.3),
+  ore:   () => new THREE.IcosahedronGeometry(0.17, 0),
+  ingot: () => new THREE.BoxGeometry(0.3, 0.16, 0.2),
+  plate: () => new THREE.BoxGeometry(0.32, 0.08, 0.24),
+  rod:   () => new THREE.CylinderGeometry(0.07, 0.07, 0.38, 7),
+  screw: () => new THREE.CylinderGeometry(0.06, 0.06, 0.2, 6),
+  reinf: () => new THREE.BoxGeometry(0.34, 0.12, 0.28),
 };
 const itemMeshes = {};
 function buildItemPools() {
@@ -1238,7 +1237,7 @@ function posAt(l, s) {
   return {
     x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t,
     z: pts[i - 1].z + (pts[i].z - pts[i - 1].z) * t,
-    y: yAt(l, s) + 0.11,
+    y: yAt(l, s) + 0.15,
   };
 }
 
@@ -1253,8 +1252,10 @@ function updateItems(t) {
       const mesh = itemMeshes[l.item];
       if (!mesh) continue;
       const len = l.length;
-      let spacing = BELT_SPEED * 60 / l.flow;
-      if (len / spacing > MAX_ITEMS_PER_TYPE / 6) spacing = len / (MAX_ITEMS_PER_TYPE / 6);
+      /* Spacing is never adjusted to fit a budget: shrinking it would make the
+         belt appear to carry more than it does. If a belt would exceed the pool,
+         we simply stop drawing further items instead of lying about the rate. */
+      const spacing = BELT_SPEED * 60 / l.flow;
       const front = (t - (l.startT || 0)) * BELT_SPEED;
       if (front <= 0) continue;
       const lie = l.item === 'rod' || l.item === 'screw';   /* cylinders lie down */
@@ -1290,7 +1291,7 @@ function resolve() {
 function scheduleSpinUp() {
   const inL = new Map(ents.map((e) => [e.id, []]));
   for (const l of links) if (inL.has(l.to)) inL.get(l.to).push(l);
-  for (const e of ents) e.startT = MACHINES[e.type].kind === 'miner' ? 0.35 : Infinity;
+  for (const e of ents) e.startT = MACHINES[e.type].kind === 'miner' ? 0.25 : Infinity;
   for (const l of links) l.startT = Infinity;
   let changed = true, guard = 0;
   while (changed && guard++ < 200) {
@@ -1307,14 +1308,14 @@ function scheduleSpinUp() {
         if (l.startT === Infinity) { ready = Infinity; break; }
         ready = Math.max(ready, l.startT + l.length / BELT_SPEED);
       }
-      const t = ready === Infinity ? Infinity : ready + 0.3;
+      const t = ready === Infinity ? Infinity : ready + 0.18;
       if (t < e.startT - 1e-6) { e.startT = t; changed = true; }
     }
   }
   spinUp = 0;
   for (const e of ents) if (isFinite(e.startT) && (e.f || 0) > 1e-4) spinUp = Math.max(spinUp, e.startT);
   for (const l of links) if (isFinite(l.startT) && (l.flow || 0) > 1e-4) spinUp = Math.max(spinUp, l.startT + l.length / BELT_SPEED);
-  spinUp += 0.5;
+  spinUp += 0.35;
 }
 const isLive = (e) => phase !== 'edit' && isFinite(e.startT) && runT >= e.startT;
 function buildAll() { buildMachines(); buildBelts(); buildRings(); }
@@ -1920,7 +1921,7 @@ function frame(now) {
     updateRings();
     /* one shared scroll: visual belt speed is constant by design, and 0.9 is the
        texture's world period in metres */
-    BELT_TEX.offset.x = -(runT * BELT_SPEED) / 0.9;
+    BELT_TEX.offset.x = -(runT * BELT_SPEED) / 0.6;
   }
   animateMachines(clock);
   updateItems(runT);
