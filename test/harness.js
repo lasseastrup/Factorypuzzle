@@ -121,7 +121,7 @@ const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
   + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
-  + ' getSpinUp: function(){return spinUp;}, getHold: function(){return holdT;}, getClock: function(){return clockT;}, getSteadyAt: function(){return steadyAt;}, isReported: function(){return reported;}, HOLD_REQUIRED: HOLD_REQUIRED, solvedMap: function(){return solved;}, setPlanner: function(v){plannerOn=v;},'
+  + ' getSpinUp: function(){return spinUp;}, getHold: function(){return deliveryProgress().worst;}, getClock: function(){return clockT;}, getDeliveries: function(){return deliveries.length;}, isReported: function(){return reported;}, DELIVER_WINDOW: DELIVER_WINDOW, deliveryProgress: function(){return deliveryProgress();}, rateMet: function(){return rateMet();}, solvedMap: function(){return solved;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
 try {
@@ -154,10 +154,14 @@ setTimeout(() => {
     let t = performance.now();
     const step = () => { t += 40; api.frame(t); };
     for (let i = 0; i < 60; i++) step();            // let the line fill
-    console.log('after fill: settled =', api.getClock() >= api.getSteadyAt(),
-                '| quota met =', api.quotaMet(), '| hold =', api.getHold().toFixed(1) + 's');
-    for (let i = 0; i < 300; i++) step();           // hold it
-    console.log('completed:', !!api.solvedMap()[api.LEVELS[0].id], '| hold =', api.getHold().toFixed(1) + 's');
+    let pr = api.deliveryProgress();
+    console.log('after fill: rate met =', api.rateMet(),
+                '| depot has', pr.worst ? pr.worst.have + '/' + pr.worst.need : '-');
+    for (let i = 0; i < 400; i++) step();
+    pr = api.deliveryProgress();
+    console.log('completed:', !!api.solvedMap()[api.LEVELS[0].id],
+                '| depot', pr.worst ? pr.worst.have + '/' + pr.worst.need : '-',
+                '| deliveries in window:', api.getDeliveries());
 
     console.log('-- planner overlay on --');
     api.setPlanner(true);
@@ -643,14 +647,17 @@ setTimeout(() => {
   console.log(`\n${p} passed, ${f} failed`);
 }, 4400);
 
-/* --- continuous running, completion by sustained delivery --- */
+/* --- completion is measured at the depot ---
+   No predicted "line filling" wait: the level passes when the depot has actually
+   received a window's worth of each quota item, and the design is capable of the
+   rate. Both conditions are observable. */
 setTimeout(() => {
   const api = globalThis.__api;
   let p = 0, f = 0;
   const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
-  console.log('\n--- continuous flow / hold to complete ---');
+  console.log('\n--- completion by delivery ---');
 
-  api.loadLevel(1);                              // plate line, not yet solved
+  api.loadLevel(1);
   const lv = api.LEVELS[1];
   const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
   const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
@@ -669,37 +676,34 @@ setTimeout(() => {
   paint(m, sm); paint(sm, co); paint(co, depot);
   api.computeCrossings(); api.resolve();
 
-  ok(api.quotaMet(), 'the built line meets quota immediately in the solver');
-  ok(api.getHold() === 0, 'but nothing is credited until the line has filled');
+  ok(api.rateMet(), 'the design is capable of the quota rate straight away');
+  ok(!api.deliveryProgress().ok, 'but the depot has received nothing, so it is not complete');
+  ok(!api.solvedMap()[lv.id], 'and the level is not passed on the strength of the rate alone');
+
+  /* a correct factory must never be asked for more than its rate implies */
+  for (const rate of [10, 20, 30, 45, 60, 90]) {
+    const need = Math.max(1, Math.floor(rate * api.DELIVER_WINDOW / 60));
+    const actuallyDelivers = Math.floor(api.DELIVER_WINDOW / (60 / rate));
+    ok(need <= actuallyDelivers,
+      `${rate}/min: asks for ${need} in ${api.DELIVER_WINDOW}s, a correct line delivers ${actuallyDelivers}`);
+  }
 
   let t = performance.now();
   const run = (secs) => { for (let i = 0; i < secs / 0.04; i++) { t += 40; api.frame(t); } };
 
-  run(api.getSpinUp() + 0.2);
-  ok(api.getClock() >= api.getSteadyAt(), 'line reports filled after its spin-up');
-  ok(!api.solvedMap()[lv.id], 'still not complete the moment it fills');
+  run(3);
+  ok(api.getDeliveries() >= 0, 'deliveries begin accumulating as material arrives');
+  run(30);
+  ok(!!api.solvedMap()[lv.id], 'completes once the depot has a full window of deliveries');
 
-  run(api.HOLD_REQUIRED - 1.0);
-  ok(!api.solvedMap()[lv.id], `not complete after holding ${(api.HOLD_REQUIRED - 1).toFixed(0)}s of ${api.HOLD_REQUIRED}s`);
-  const partial = api.getHold();
-  ok(partial > 2 && partial < api.HOLD_REQUIRED, `hold timer is counting (${partial.toFixed(1)}s)`);
-
-  /* touching the factory resets the countdown */
-  api.addEntity('smelter', 6.5, 7.5, 0);
-  api.resolve();
-  ok(api.getHold() === 0, 'editing the factory resets the hold timer');
-  ok(api.getSteadyAt() > api.getClock(), 'and the line has to fill again');
-
-  run(api.getSpinUp() + api.HOLD_REQUIRED + 0.5);
-  ok(!!api.solvedMap()[lv.id], 'completes once quota is held for the full duration');
-
-  /* a line that cannot meet quota never completes */
+  /* editing clears the window, so a level cannot be passed on stale deliveries */
   api.loadLevel(2);
   const lv2 = api.LEVELS[2];
   api.addEntity('miner', lv2.nodes[0].x, lv2.nodes[0].z, 0);
   api.resolve();
-  run(30);
-  ok(!api.quotaMet() && !api.solvedMap()[lv2.id], 'a miner alone never completes the screw level');
+  ok(api.getDeliveries() === 0, 'an edit clears the delivery window');
+  run(25);
+  ok(!api.rateMet() && !api.solvedMap()[lv2.id], 'a miner alone never passes the screw level');
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 4900);

@@ -281,9 +281,15 @@ let selected = null, result = null, plannerOn = false;
    A level is completed by holding quota for HOLD_REQUIRED seconds after that,
    which is why there is no play button: the verification is the factory simply
    continuing to work. */
-let clockT = 0, editT = 0, steadyAt = 0, spinUp = 0;
-let holdT = 0, reported = false;
-const HOLD_REQUIRED = 5;
+let clockT = 0, editT = 0, spinUp = 0;
+let reported = false;
+/* Completion is measured, not predicted. The depot records every item it receives
+   and the level is passed when the last DELIVER_WINDOW seconds contain a full
+   window's worth of each quota item. There is no "line filling" state because
+   there is nothing to wait out: until material arrives, the count is simply low,
+   and the belts themselves show it travelling. */
+const DELIVER_WINDOW = 8;
+let deliveries = [];
 const phase = 'live';
 let stroke = null;   // { fromEnt, fromPort, pts[] }
 
@@ -1343,9 +1349,12 @@ function advanceBelts(dt) {
 
     /* the destination removes material at the rate it actually consumes */
     l.drainAcc = Math.min(2, l.drainAcc + ((l.drain || 0) / 60) * dt);
+    const intoDepot = MACHINES[(entById(l.to) || {}).type || ''] &&
+                      MACHINES[entById(l.to).type].kind === 'sink';
     while (items.length && items[0] >= len - 1e-3 && l.drainAcc >= 1) {
       items.shift();
       l.drainAcc -= 1;
+      if (intoDepot && l.item) deliveries.push({ item: l.item, t: clockT });
     }
 
     /* advance, never overtaking the item ahead */
@@ -1440,15 +1449,12 @@ function resolve() {
   /* When the last belt actually finishes filling, using the shifted schedule. A
      belt that was already running keeps its old start, so editing one corner of a
      factory no longer makes the player wait out a full cold start again. */
-  steadyAt = clockT;
+  spinUp = 0;
   for (const l of links) {
     if (!isFinite(l.startT) || (l.flow || 0) <= 1e-4) continue;
-    steadyAt = Math.max(steadyAt, l.startT + l.length / BELT_SPEED);
+    spinUp = Math.max(spinUp, l.startT + l.length / BELT_SPEED - clockT);
   }
-  for (const e of ents) if (isFinite(e.startT) && (e.f || 0) > 1e-4) steadyAt = Math.max(steadyAt, e.startT);
-  steadyAt += 0.35;
-  spinUp = steadyAt - clockT;
-  holdT = 0;                 /* the line must run undisturbed to count */
+  deliveries = [];           /* the line must run undisturbed to count */
   buildAll();
   refreshQuotas();
   updateRuler();
@@ -1556,21 +1562,13 @@ function setTool(t) {
 
 /* The player needs to know why nothing is being credited yet: still filling, or
    filling fine but short of quota, or counting down to a pass. */
-function updateHold(settled, met) {
+function updateHold(met, prog) {
   const bar = $('#holdBar'), txt = $('#holdText'), box = $('#hold');
   box.className = '';
-  if (solved[L.id] && holdT >= HOLD_REQUIRED) {
+  if (solved[L.id]) {
     box.classList.add('done');
     bar.style.width = '100%';
-    txt.textContent = 'QUOTA HELD \u2014 COMPLETE';
-    return;
-  }
-  if (!settled) {
-    box.classList.add('wait');
-    const p = Math.max(0, Math.min(1, (clockT - editT) / Math.max(0.001, steadyAt - editT)));
-    bar.style.width = (p * 100).toFixed(0) + '%';
-    const waiting = Math.max(0, steadyAt - clockT);
-    txt.textContent = waiting > 0.05 ? 'LINE FILLING \u2014 ' + waiting.toFixed(1) + 's' : 'LINE FILLING';
+    txt.textContent = 'QUOTA DELIVERED \u2014 COMPLETE';
     return;
   }
   if (!met) {
@@ -1578,8 +1576,10 @@ function updateHold(settled, met) {
     txt.textContent = 'BELOW QUOTA';
     return;
   }
-  bar.style.width = ((holdT / HOLD_REQUIRED) * 100).toFixed(0) + '%';
-  txt.textContent = 'HOLDING \u2014 ' + holdT.toFixed(1) + ' / ' + HOLD_REQUIRED.toFixed(1) + 's';
+  const w = prog.worst;
+  bar.style.width = (Math.min(1, w ? w.frac : 0) * 100).toFixed(0) + '%';
+  txt.textContent = 'DEPOT ' + (w ? w.have + ' / ' + w.need + ' ' + ITEMS[w.item].short : '')
+    + ' \u00b7 LAST ' + DELIVER_WINDOW + 's';
 }
 
 function refreshQuotas() {
@@ -1733,10 +1733,34 @@ function updateLabels() {
 /* ============================================================
    RUN
    ============================================================ */
-function quotaMet() {
+/* The rate the design is capable of, which is what the ratios are about. */
+function rateMet() {
   const got = (result && result.output) || {};
   return Object.entries(L.quota).every(([k, v]) => (got[k] || 0) >= v - 1e-4);
 }
+
+/* A stream at R items per minute puts at least floor(R * W / 60) items through any
+   window of W seconds, so that is what the depot has to show. Never rounds up:
+   asking for more than the quota implies would fail a correct factory. */
+const neededIn = (rate) => Math.max(1, Math.floor(rate * DELIVER_WINDOW / 60));
+
+function deliveryProgress() {
+  const cut = clockT - DELIVER_WINDOW;
+  while (deliveries.length && deliveries[0].t < cut) deliveries.shift();
+  const counts = {};
+  for (const d of deliveries) counts[d.item] = (counts[d.item] || 0) + 1;
+  let worst = null;
+  let ok = true;
+  for (const [item, rate] of Object.entries(L.quota)) {
+    const need = neededIn(rate), have = counts[item] || 0;
+    if (have < need) ok = false;
+    const frac = have / need;
+    if (!worst || frac < worst.frac) worst = { item, have, need, frac };
+  }
+  return { ok, worst };
+}
+
+function quotaMet() { return rateMet(); }
 
 function showReport(met) {
   const sc = score({ entities: ents, links }, result);
@@ -1746,7 +1770,7 @@ function showReport(met) {
     ['Ore', Math.round(sc.ore), L.par.ore, 'raw ore per minute'],
   ];
   let html = '<h3>' + (met ? 'Quota met' : 'Quota not met') + '</h3>'
-    + '<div class="sub">' + L.name + ' · line fills in ' + spinUp.toFixed(1) + 's · quota held ' + HOLD_REQUIRED + 's</div>';
+    + '<div class="sub">' + L.name + ' · quota delivered over ' + DELIVER_WINDOW + 's</div>';
   if (!met) {
     const got = result.output || {};
     html += '<div class="sub">Output: ' + Object.entries(L.quota)
@@ -2052,7 +2076,7 @@ function loadLevel(i) {
   ents = []; links = []; nextId = 1;
   selected = null; stroke = null; result = null;
   plannerOn = false;
-  clockT = 0; editT = 0; steadyAt = 0; holdT = 0; reported = !!solved[L.id];
+  clockT = 0; editT = 0; deliveries = []; reported = !!solved[L.id];
   $('#plannerBtn').classList.remove('on');
   $('#report').style.display = 'none';
   showInspector(null);
@@ -2132,14 +2156,14 @@ function frame(now) {
   const sig = links.map((l) => (roomy(l) ? '1' : '0')).join('');
   if (sig !== roomSig) { roomSig = sig; resolveFlow(); }
 
-  /* Only credit quota once nothing is still accumulating: while a belt is filling,
-     upstream runs faster than the line will ultimately sustain. */
-  const stable = !links.some((l) => (l.flow || 0) - (l.drain || 0) > 1e-4 && roomy(l));
-  const settled = clockT >= steadyAt && stable;
-  const met = quotaMet();
-  if (settled && met) holdT += dt; else holdT = 0;
-  updateHold(settled, met);
-  if (holdT >= HOLD_REQUIRED && !reported) {
+  /* Two conditions, both plainly true or not. The design must be capable of the
+     rate, and the depot must actually have received a window's worth. The rate
+     check also stops a jammed belt draining in a burst from passing a factory
+     whose sustained output is short. */
+  const met = rateMet();
+  const prog = deliveryProgress();
+  updateHold(met, prog);
+  if (met && prog.ok && !reported) {
     reported = true;
     solved[L.id] = true;
     buildLevelBar();

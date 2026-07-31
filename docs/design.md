@@ -1,8 +1,8 @@
-# RATIO — Game Design Document (v0.5)
+# RATIO — Game Design Document (v0.6)
 
 *Working title. Alternatives: Throughput, Feedstock, Assembly Line, Per Minute.*
 
-**v0.5:** the factory runs continuously — no play button, completion is holding quota for five seconds (§5.1).
+**v0.6:** the factory runs continuously — no play button, no waiting state; the depot counts what it actually receives (§5.1).
 
 **Resolved since v0.1:** modules are abstract boxes sized by machine count (§7.4) · a planner overlay assists the arithmetic (§5.5) · belts visibly fill before validation, no fast-forward (§5.1) · multi-output quotas are the primary progression axis, on a 7-rung coupling ladder (§8.2) · **the grid is gone — belts are painted freehand and measured in metres (§5.2, §9)**.
 
@@ -29,7 +29,7 @@ The satisfaction of a machine that runs at exactly 100% with nothing backed up a
 ```
 Read the quota  →  plan the ratio  →  place machines  →  paint belts
       ↑                                                      ↓
-  optimise / revisit  ←  scored on 3 axes  ←  hold quota 5s at the depot
+  optimise / revisit  ←  scored on 3 axes  ←  depot receives quota for 8s
       ↓                                          (the line never stops running)
   level becomes a Module  →  available in every later level
 ```
@@ -46,17 +46,19 @@ Everything is expressed as **items per minute**. The sim runs at 20 Hz for visua
 
 Design rule: all base rates are multiples of 5, and most are multiples of 15. This keeps mental arithmetic viable.
 
-**Verification model: the factory never stops.** There is no play button. The moment a machine is placed it is working, and belts carry whatever reaches them. A level is completed by **holding quota at the depot for five continuous seconds** once the pipeline has physically filled. Break the line and the counter resets to zero.
+**Verification model: the depot counts.** There is no play button and no waiting state. The moment a machine is placed it is working, belts carry whatever reaches them, and the level is completed when two plainly observable things are both true:
 
-This replaces an earlier press-Run-and-watch-it-validate model, and it is better for three reasons. It removes a mode: there is no "editing" state distinct from a "running" state, so the factory is always telling you the truth about itself. It makes the diagnosis continuous — a machine that starves the instant you reroute a belt shows it immediately rather than on the next run. And it makes completion feel earned by the factory rather than granted by a button.
+1. **The design is capable of the rate.** The solver's steady-state output at the depot meets the quota. This is the ratio puzzle itself.
+2. **The depot has actually received a window's worth.** Over the last **8 seconds** it must have taken in at least `floor(rate × 8 / 60)` of each quota item.
 
-The spin-up still matters and is still visible:
+The second condition is why the first is not enough on its own: a correct design still has to physically run. It also stops a backed-up belt draining in a burst from passing a factory whose sustained output is short.
 
-- **Filling is a real delay.** New belts take their length divided by belt speed to fill, so a freshly painted run visibly loads before it contributes. The verification bar reports which of three states you are in: *line filling*, *below quota*, or *holding — 3.2 / 5.0s*.
-- Target: a typical level fills in **≤ 8 seconds**, the largest act-3 plot in **≤ 15**.
-- Belt visual travel speed is a *tuned* number, not derived from throughput. A 60/min belt and a 240/min belt move items at similar visible speed but different spacing. Physically dishonest, dramatically better — and it costs nothing in accuracy, because spacing is `speed × 60 / flow` while the rate past a point is `speed / spacing`, so the speed cancels and the visible rate always equals the real one.
-- Longest-path length in a level is a level-design budget. If a plot forces a 40-metre serial chain, the level is too big.
-- **Edits preserve continuity.** A belt already carrying the same rate keeps running rather than visibly restarting because something elsewhere changed. Only what actually changed refills.
+The threshold never rounds up. A stream at R per minute puts at least `floor(R × 8 / 60)` items through any 8-second window, so asking for that many can never fail a correct factory — whereas asking for one more would fail it on window alignment alone.
+
+**What this replaced, and why.** An earlier version pressed Run, watched a cold start, then validated; a later one ran continuously but showed a *predicted* "line filling" countdown before it would credit anything. Both existed for the same reason: quota was measured from the solver's predicted rate, which becomes true the instant the last belt is painted, so something had to stop a level passing before material had arrived. A predicted timer was a crude proxy for an observation. Once items are simulated individually the depot can simply count them, and the waiting state disappears — until material arrives the count is low, and the belts visibly show it travelling. The bar now has two states, both of which explain themselves: *below quota*, or *depot 3 / 4 ING · last 8s*.
+
+- Belt visual travel speed is a *tuned* number, not derived from throughput. A 60/min belt and a 240/min belt move items at similar visible speed but different spacing. Physically dishonest, dramatically better — and it costs nothing in accuracy, because spacing emerges from the spawn rate, so the visible rate always equals the real one.
+- Longest-path length in a level is still a level-design budget. A player should not be waiting long for the first item to cross.
 
 ### 5.2 Space, and painted belts
 
