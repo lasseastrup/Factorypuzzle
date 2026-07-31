@@ -1327,16 +1327,17 @@ function posAt(l, s) {
    and assumes the miner is idle, when the truth is the far end is the problem. */
 function updateJams(dt) {
   for (const l of links) {
-    const want = l.want || 0, flow = l.flow || 0;
+    const flow = l.flow || 0, drain = l.drain || 0;
     if (l.jamLen == null) l.jamLen = 0;
     const filled = isFinite(l.startT) && clockT >= l.startT + l.length / BELT_SPEED;
-    const excess = want - flow;
-    if (excess > 1e-4 && filled) {
-      /* the queue grows by one item-space for every item that cannot leave */
-      l.jamLen = Math.min(l.length, l.jamLen + (excess / 60) * JAM_SPACING * dt);
-    } else if (l.jamLen > 0) {
-      l.jamLen = Math.max(0, l.jamLen - BELT_SPEED * dt);
-    }
+    if (!filled) continue;
+    /* Pure conservation: the queue is however much has arrived and not left. When
+       arrival equals removal it holds its length — it does not quietly drain. An
+       earlier version shrank it whenever nothing was accumulating, which made a
+       blocked belt oscillate between full and empty once a frame. */
+    const net = (flow - drain) / 60 * JAM_SPACING;      // metres per second
+    if (net > 1e-6) l.jamLen = Math.min(l.length, l.jamLen + net * dt);
+    else if (net < -1e-6) l.jamLen = Math.max(0, l.jamLen + net * dt);
   }
 }
 
@@ -1368,8 +1369,14 @@ function updateItems(t) {
         return true;
       };
 
-      /* stationary queue packed against the blocked end */
-      for (let s = len; s > freeLen; s -= JAM_SPACING) if (!place(s)) break;
+      /* Queue packed against the far end. If the destination is consuming, it
+         creeps forward at the rate material leaves rather than sitting frozen —
+         a backed-up belt that is slowly draining should look like it. */
+      if (jam > 1e-4) {
+        const creep = ((l.drain || 0) / 60) * JAM_SPACING * t;
+        const phase = ((creep % JAM_SPACING) + JAM_SPACING) % JAM_SPACING;
+        for (let s = len - JAM_SPACING + phase; s > freeLen; s -= JAM_SPACING) if (!place(s)) break;
+      }
 
       /* and whatever is still moving, on the stretch that is not yet queued */
       const moving = (l.flow || 0) > 1e-4 ? l.flow : ((l.want || 0) > 1e-4 && jam < len ? l.want : 0);
@@ -1393,9 +1400,26 @@ function updateItems(t) {
 /* ============================================================
    SOLVE + SPIN-UP
    ============================================================ */
+/* A belt with physical space left will accept material at capacity. This is what
+   makes a half-built line fill from the front instead of sitting dead: each machine
+   works until its own output belt is full, then blocks, and the jam walks
+   backwards. */
+const roomy = (l) => (l.jamLen || 0) < l.length - 0.05;
+
+/* Re-solve because the belts filled up, not because the player changed anything.
+   Keeps the schedule and the hold timer intact. */
+let roomSig = '';
+function resolveFlow() {
+  const keep = links.map((l) => l.startT);
+  result = solve({ entities: ents, links }, { roomy });
+  links.forEach((l, i) => { l.startT = keep[i]; });
+  buildAll();
+  refreshQuotas();
+}
+
 function resolve() {
   const prev = new Map(links.map((l) => [l.id, { flow: l.flow, startT: l.startT }]));
-  result = solve({ entities: ents, links });
+  result = solve({ entities: ents, links }, { roomy });
   scheduleSpinUp(prev);
   editT = clockT;
   /* When the last belt actually finishes filling, using the shifted schedule. A
@@ -1530,7 +1554,8 @@ function updateHold(settled, met) {
     box.classList.add('wait');
     const p = Math.max(0, Math.min(1, (clockT - editT) / Math.max(0.001, steadyAt - editT)));
     bar.style.width = (p * 100).toFixed(0) + '%';
-    txt.textContent = 'LINE FILLING \u2014 ' + Math.max(0, steadyAt - clockT).toFixed(1) + 's';
+    const waiting = Math.max(0, steadyAt - clockT);
+    txt.textContent = waiting > 0.05 ? 'LINE FILLING \u2014 ' + waiting.toFixed(1) + 's' : 'LINE FILLING';
     return;
   }
   if (!met) {
@@ -2084,7 +2109,15 @@ function frame(now) {
   /* Verification is just the factory continuing to work. Once the pipeline has
      physically filled, holding quota for HOLD_REQUIRED seconds completes the
      level; breaking it resets the timer. */
-  const settled = clockT >= steadyAt;
+  /* When a belt fills or drains the flow picture changes, so re-solve — but only on
+     the transition, not every frame. */
+  const sig = links.map((l) => (roomy(l) ? '1' : '0')).join('');
+  if (sig !== roomSig) { roomSig = sig; resolveFlow(); }
+
+  /* Only credit quota once nothing is still accumulating: while a belt is filling,
+     upstream runs faster than the line will ultimately sustain. */
+  const stable = !links.some((l) => (l.flow || 0) - (l.drain || 0) > 1e-4 && roomy(l));
+  const settled = clockT >= steadyAt && stable;
   const met = quotaMet();
   if (settled && met) holdT += dt; else holdT = 0;
   updateHold(settled, met);

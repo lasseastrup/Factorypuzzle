@@ -134,7 +134,14 @@ This is a healthier difficulty profile for mobile anyway: spatial reasoning surv
 
 ### 5.6 Backpressure, byproducts and stalls
 
-**A belt that cannot deliver fills up.** Material goes onto it the moment it exists — a miner does not wait for the line to be finished downstream — and queues against the blocked end until the belt is full, at which point the miner reads as *blocked* rather than *stopped*. This matters more than it sounds: rendering a stalled belt as empty tells the player the miner is idle, which is the opposite of the truth. A visibly backed-up belt points at the real problem, which is somewhere further along.
+**A half-built line fills from the front.** Every machine works the moment it has input, whether or not the chain reaches the depot yet. A belt with physical space on it accepts material at capacity, so a machine runs until its *own* output belt is full, then blocks — and the jam walks backwards one belt at a time until it reaches the miner.
+
+This matters more than it sounds. Solving only for steady state says an unfinished chain is entirely jammed with nothing moving, which is true eventually and useless as feedback: the player sees dead machines and empty belts and concludes their factory is broken, when in fact it works and simply has nowhere to put the output. A line that visibly fills up and stalls at a specific point tells them where to build next.
+
+Two rules keep it honest:
+
+- **Queues obey conservation.** A belt's backlog grows by what arrives minus what the far end removes. When those are equal it *holds its length* — it does not quietly drain. So connecting a stalled line does not magically clear the backlog; the backlog only shrinks if the far end outpaces the near end. A packed queue that is being consumed creeps forward at the consumption rate rather than sitting frozen.
+- **Quota is only credited once nothing is still accumulating.** While a belt fills, upstream runs faster than the line can ultimately sustain, so crediting output during that window would let a factory pass on a transient it cannot hold.
 
 From act 2, some recipes emit a secondary output. If a byproduct isn't consumed or sunk, the machine's output blocks and the whole line stalls. This converts the game from "chain builder" to "system balancer" and is where the real difficulty lives. Sinks (incinerators) exist but cost score — the clean solution loops the byproduct back into something useful.
 

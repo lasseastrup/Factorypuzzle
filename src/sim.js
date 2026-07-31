@@ -94,7 +94,14 @@ function recipeOf(ent) {
    Seeding optimistically also dodges the deadlock a naive formulation hits: an
    assembler needing plates AND screws will refuse to ask for either while both are
    absent, and sit at zero forever. */
-function solve(state) {
+function solve(state, opts) {
+  /* opts.roomy(link) -> true while a belt still has physical space on it.
+     Steady state alone says an unfinished chain is entirely jammed with nothing
+     moving, which is true eventually but not what happens first: each machine runs
+     until its own output belt is full, so material fills the line from the front.
+     Treating a belt with room as able to accept at capacity reproduces that, and
+     converges to the steady solution as the belts fill. */
+  const roomy = (opts && opts.roomy) || (() => false);
   const ents = state.entities;
   const links = state.links;
   const byId = new Map(ents.map((e) => [e.id, e]));
@@ -173,7 +180,8 @@ function solve(state) {
           const dest = byId.get(l.to);
           const dd = (dest && demand.get(dest.id)) || {};
           let want;
-          if (dd['*'] != null) want = dd['*'];
+          if (roomy(l)) want = l.cap;                 /* still space on the belt */
+          else if (dd['*'] != null) want = dd['*'];
           else if (l.item != null) want = dd[l.item] || 0;
           else want = l.cap;          /* nothing has flowed yet: assume it will fit */
           onward += Math.min(l.cap, want);
@@ -224,6 +232,7 @@ function solve(state) {
         offered += amount;
         if (amount <= EPS || !outs.length) continue;
         const caps = outs.map((l) => {
+          if (roomy(l)) return Math.max(0, l.cap - (l.flow || 0));
           const dest = byId.get(l.to);
           const dd = demand.get(dest.id);
           const want = dd['*'] != null ? dd['*'] : (dd[item] || 0);
@@ -260,6 +269,28 @@ function solve(state) {
     l.saturated = l.flow >= l.cap - 1e-4;
     l.overCapacity = (l.potFlow || 0) > l.cap + 1e-4;
     if (l.saturated && l.overCapacity) result.bottlenecks.push(l);
+  }
+
+  /* How fast the destination actually takes material off each belt. A belt
+     accumulates at flow minus drain — not at want minus flow, which misses the case
+     that matters: material arriving at a machine that cannot consume it. Without
+     this the belt would carry cargo into a stopped machine and the cargo would
+     simply cease to exist. */
+  for (const l of links) {
+    const dest = byId.get(l.to);
+    if (!dest) { l.drain = 0; continue; }
+    const def = MACHINES[dest.type];
+    if (def.kind === 'sink') {
+      l.drain = l.flow || 0;
+    } else if (def.kind === 'splitter' || def.kind === 'merger') {
+      const ins = (inLinks.get(dest.id) || []).reduce((t, x) => t + (x.flow || 0), 0);
+      const outsT = (outLinks.get(dest.id) || []).reduce((t, x) => t + (x.flow || 0), 0);
+      l.drain = ins > EPS ? ((l.flow || 0) / ins) * Math.min(ins, outsT) : 0;
+    } else {
+      const r = recipeOf(dest);
+      const need = (r && l.item) ? (r.in[l.item] || 0) * Math.max(0, dest.f || 0) : 0;
+      l.drain = Math.min(l.flow || 0, need);
+    }
   }
   for (const e of ents) {
     const def = MACHINES[e.type];
@@ -330,7 +361,13 @@ function classify(e, def, outs) {
   const r = recipeOf(e);
   if (!r) return 'idle';
   if (def.kind === 'miner' && e.f <= EPS) return outs.length ? 'blocked' : 'idle';
-  if (e.f <= EPS) return 'stopped';
+  if (e.f <= EPS) {
+    /* Distinguish "nowhere to put it" from "nothing to work with". A machine whose
+       inputs are satisfied but whose output belt is full is blocked, and pointing
+       the player downstream is the useful thing to say. */
+    if (outs.length && e.accept != null && e.accept <= EPS && (e.fIn == null || e.fIn > EPS)) return 'blocked';
+    return 'stopped';
+  }
   if (e.f > 0.9999) return 'running';
   for (const l of outs) if (l.saturated && l.overCapacity) return 'blocked';
   if (e.accept < 0.9999) return 'blocked';

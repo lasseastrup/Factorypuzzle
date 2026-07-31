@@ -116,7 +116,7 @@ const body = blocks[blocks.length-1];
 const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet','LEVELS','MACHINES','groundAt','handleTap','portsOf','freeOutPort','commitStroke','beltMetres','computeCrossings','entAt','setTool','frame','score','updateLabels',
   'simplify','chaikin','resample','minRadius','segHit','routeBlocked','arcTable','MIN_RADIUS','canPlace',
   'sun','renderer','animateMachines','updateStatus','buildStatus','gMachines','BELT_TEX','BELT_SPEED',
-  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS','smoothPath','buildPath','smoothToRadius','MIN_RADIUS','SMOOTH_CAPS','ribbon','BELT_HW','RAIL_HW','BELT_TEX_PERIOD','gBelts','arcTable','updateJams','JAM_SPACING','itemMeshes','updateItems'];
+  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS','smoothPath','buildPath','smoothToRadius','MIN_RADIUS','SMOOTH_CAPS','ribbon','BELT_HW','RAIL_HW','BELT_TEX_PERIOD','gBelts','arcTable','updateJams','JAM_SPACING','itemMeshes','updateItems','roomy','resolveFlow'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
@@ -816,15 +816,15 @@ setTimeout(() => {
   console.log(`\n${p} passed, ${f} failed`);
 }, 5900);
 
-/* --- a belt that cannot deliver must fill up, not look empty ---
-   The miner puts ore on the belt the moment the belt exists. If the far end is not
-   connected the ore queues against it and stops. Rendering nothing there tells the
-   player the miner is idle, which is the opposite of the truth. */
+/* --- a half-built line fills from the front ---
+   Each machine works until its own output belt is full, then blocks, and the jam
+   walks backwards. Previously nothing moved at all until the line reached the
+   depot, which told the player their machines were broken. */
 setTimeout(() => {
   const api = globalThis.__api;
   let p = 0, f = 0;
   const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
-  console.log('\n--- belts back up ---');
+  console.log('\n--- half-built line fills up ---');
 
   api.loadLevel(0);
   const lv = api.LEVELS[0];
@@ -839,41 +839,41 @@ setTimeout(() => {
     globalThis.__setStroke(a, Math.max(0, api.freeOutPort(a)));
     api.commitStroke(pts, p1);
   };
-  paint(m, sm);                      // miner -> smelter, and the smelter goes nowhere
+  paint(m, sm);                      // miner -> smelter, smelter output unconnected
   api.computeCrossings(); api.resolve();
 
   const link = api.links()[0];
-  ok(!!link, 'a belt was painted from the miner');
-  ok(link.item === 'ore', `the belt is tagged as carrying ore even though nothing can leave (item=${link.item})`);
-  ok((link.want || 0) > 29, `the miner is trying to push ${(link.want || 0).toFixed(0)}/min onto it`);
-  ok((link.flow || 0) < 1e-6, 'and none of it is getting through, because the smelter output is unconnected');
-  ok(m.state === 'blocked', `the miner reads as blocked rather than stopped (${m.state})`);
+  ok(!!link && link.item === 'ore', 'a belt carries ore from the miner');
+  ok((link.flow || 0) > 29, `the miner works immediately: ${(link.flow || 0).toFixed(0)}/min onto the belt`);
+  ok(m.state === 'running', `and reads as running, not blocked (${m.state})`);
+  ok((link.drain || 0) < 1e-6, 'the smelter cannot take any of it, having nowhere to send ingots');
 
-  /* run and watch the queue build */
   let t = performance.now();
   const run = (secs) => { for (let i = 0; i < secs / 0.04; i++) { t += 40; api.frame(t); } };
-  ok((link.jamLen || 0) === 0, 'nothing queued before the first ore reaches the far end');
+
   run(link.length / api.BELT_SPEED + 0.5);
   const early = link.jamLen || 0;
-  run(20);
+  run(30);
   const later = link.jamLen || 0;
-  ok(later > early, `the queue grows over time (${early.toFixed(2)} m -> ${later.toFixed(2)} m)`);
-  ok(later <= link.length + 1e-6, 'and never exceeds the length of the belt');
+  ok(later > early, `ore piles up against the far end (${early.toFixed(2)} m -> ${later.toFixed(2)} m)`);
+  ok(later >= link.length - 0.1, 'until the belt is completely full');
+  ok((link.flow || 0) < 1e-6 && m.state === 'blocked',
+    `only then does the miner block (${(link.flow || 0).toFixed(0)}/min, ${m.state})`);
 
-  /* the important bit: there are items rendered on it */
   api.updateItems(api.getClock());
-  const oreCount = api.itemMeshes.ore.count;
-  ok(oreCount > 0, `ore is visible on the stalled belt (${oreCount} items)`);
-  ok(oreCount >= Math.floor(later / api.JAM_SPACING),
-    'at least as many items as the queue length implies');
+  ok(api.itemMeshes.ore.count > 0, `and the ore is visible on the belt (${api.itemMeshes.ore.count} items)`);
 
-  /* connect the smelter onward and the queue must drain */
+  /* now give the smelter somewhere to send ingots */
   const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
   paint(sm, depot);
   api.computeCrossings(); api.resolve();
-  run(6);
-  ok((link.flow || 0) > 29, `ore flows once the line is complete (${(link.flow || 0).toFixed(0)}/min)`);
-  ok((link.jamLen || 0) < later, `the queue drains (${later.toFixed(2)} m -> ${(link.jamLen || 0).toFixed(2)} m)`);
+  run(8);
+  ok((link.flow || 0) > 29, `ore flows again once the line is complete (${(link.flow || 0).toFixed(0)}/min)`);
+  ok((link.drain || 0) > 29, `and the smelter is consuming it (${(link.drain || 0).toFixed(0)}/min)`);
+  ok(sm.f > 0.99, `the smelter is working (${(sm.f * 100).toFixed(0)}%)`);
+  /* arrival equals removal, so the backlog holds its length rather than vanishing.
+     That is the honest steady state: it only shrinks if the far end outpaces the near end. */
+  ok(Math.abs((link.jamLen || 0) - later) < 0.4, 'the backlog holds steady rather than evaporating');
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 6400);
