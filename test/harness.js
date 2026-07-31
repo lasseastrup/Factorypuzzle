@@ -110,15 +110,15 @@ const blocks = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/scrip
 const body = blocks[blocks.length-1];
 
 /* expose internals for poking after boot */
-const exports_ = ['loadLevel','addEntity','resolve','startRun','scene','camera','LEVELS','MACHINES','groundAt','handleTap','portsOf','freeOutPort','commitStroke','beltMetres','computeCrossings','entAt','setTool','frame','validate','score','updateLabels',
+const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet','LEVELS','MACHINES','groundAt','handleTap','portsOf','freeOutPort','commitStroke','beltMetres','computeCrossings','entAt','setTool','frame','score','updateLabels',
   'simplify','chaikin','resample','minRadius','segHit','routeBlocked','arcTable','MIN_RADIUS','canPlace',
   'sun','renderer','animateMachines','updateStatus','buildStatus','gMachines','BELT_TEX','BELT_SPEED',
-  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS'];
+  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS','smoothPath','buildPath','smoothToRadius','MIN_RADIUS','SMOOTH_CAPS'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
   + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
-  + ' getSpinUp: function(){return spinUp;}, setPlanner: function(v){plannerOn=v;},'
+  + ' getSpinUp: function(){return spinUp;}, getHold: function(){return holdT;}, getClock: function(){return clockT;}, getSteadyAt: function(){return steadyAt;}, isReported: function(){return reported;}, HOLD_REQUIRED: HOLD_REQUIRED, solvedMap: function(){return solved;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
 try {
@@ -147,10 +147,14 @@ setTimeout(() => {
     const res = api.getResult();
     console.log('LV1 output:', JSON.stringify(res.output), '| spin-up', api.getSpinUp().toFixed(2) + 's');
 
-    console.log('-- starting run --');
-    api.startRun();
-    for (let i = 0; i < 400; i++) api.frame(performance.now() + i * 33);
-    console.log('phase after run:', api.getPhase());
+    console.log('-- the factory just runs; advance the clock --');
+    let t = performance.now();
+    const step = () => { t += 40; api.frame(t); };
+    for (let i = 0; i < 60; i++) step();            // let the line fill
+    console.log('after fill: settled =', api.getClock() >= api.getSteadyAt(),
+                '| quota met =', api.quotaMet(), '| hold =', api.getHold().toFixed(1) + 's');
+    for (let i = 0; i < 300; i++) step();           // hold it
+    console.log('completed:', !!api.solvedMap()[api.LEVELS[0].id], '| hold =', api.getHold().toFixed(1) + 's');
 
     console.log('-- planner overlay on --');
     api.setPlanner(true);
@@ -635,3 +639,113 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 4400);
+
+/* --- continuous running, completion by sustained delivery --- */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- continuous flow / hold to complete ---');
+
+  api.loadLevel(1);                              // plate line, not yet solved
+  const lv = api.LEVELS[1];
+  const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
+  const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const sm = api.addEntity('smelter', 6.5, 3.5, 0);
+  const co = api.addEntity('constructor', 10.5, 3.5, 0);
+  co.recipe = 'plate';
+  api.resolve();
+  const paint = (a, b) => {
+    const p0 = api.portsOf(a).out[Math.max(0, api.freeOutPort(a))];
+    const p1 = api.portsOf(b).in[0];
+    const pts = [];
+    for (let t = 0.1; t <= 1.0001; t += 0.1) pts.push({ x: p0.x + (p1.x - p0.x) * t, z: p0.z + (p1.z - p0.z) * t });
+    globalThis.__setStroke(a, Math.max(0, api.freeOutPort(a)));
+    api.commitStroke(pts, p1);
+  };
+  paint(m, sm); paint(sm, co); paint(co, depot);
+  api.computeCrossings(); api.resolve();
+
+  ok(api.quotaMet(), 'the built line meets quota immediately in the solver');
+  ok(api.getHold() === 0, 'but nothing is credited until the line has filled');
+
+  let t = performance.now();
+  const run = (secs) => { for (let i = 0; i < secs / 0.04; i++) { t += 40; api.frame(t); } };
+
+  run(api.getSpinUp() + 0.2);
+  ok(api.getClock() >= api.getSteadyAt(), 'line reports filled after its spin-up');
+  ok(!api.solvedMap()[lv.id], 'still not complete the moment it fills');
+
+  run(api.HOLD_REQUIRED - 1.0);
+  ok(!api.solvedMap()[lv.id], `not complete after holding ${(api.HOLD_REQUIRED - 1).toFixed(0)}s of ${api.HOLD_REQUIRED}s`);
+  const partial = api.getHold();
+  ok(partial > 2 && partial < api.HOLD_REQUIRED, `hold timer is counting (${partial.toFixed(1)}s)`);
+
+  /* touching the factory resets the countdown */
+  api.addEntity('smelter', 6.5, 7.5, 0);
+  api.resolve();
+  ok(api.getHold() === 0, 'editing the factory resets the hold timer');
+  ok(api.getSteadyAt() > api.getClock(), 'and the line has to fill again');
+
+  run(api.getSpinUp() + api.HOLD_REQUIRED + 0.5);
+  ok(!!api.solvedMap()[lv.id], 'completes once quota is held for the full duration');
+
+  /* a line that cannot meet quota never completes */
+  api.loadLevel(2);
+  const lv2 = api.LEVELS[2];
+  api.addEntity('miner', lv2.nodes[0].x, lv2.nodes[0].z, 0);
+  api.resolve();
+  run(30);
+  ok(!api.quotaMet() && !api.solvedMap()[lv2.id], 'a miner alone never completes the screw level');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 4900);
+
+/* --- painted paths should not look erratic --- */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- path smoothing ---');
+
+  /* a deliberately shaky drag: a straight run with hand tremor on top */
+  const shaky = [];
+  for (let i = 0; i <= 60; i++) {
+    shaky.push({ x: i * 0.18, z: Math.sin(i * 1.9) * 0.16 + Math.sin(i * 0.7) * 0.1 });
+  }
+  const turning = (pts) => {
+    let sum = 0;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const a1 = Math.atan2(pts[i].z - pts[i - 1].z, pts[i].x - pts[i - 1].x);
+      const a2 = Math.atan2(pts[i + 1].z - pts[i].z, pts[i + 1].x - pts[i].x);
+      let d = a2 - a1;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      sum += Math.abs(d);
+    }
+    return sum;
+  };
+
+  const rawTurn = turning(api.resample(shaky, 0.3));
+  const smoothed = api.smoothToRadius(api.chaikin(api.simplify(shaky, 0.24), 3), 40);
+  const smoothTurn = turning(smoothed);
+
+  ok(smoothTurn < rawTurn * 0.5,
+    `smoothing removes most of the wander (total turning ${rawTurn.toFixed(2)} rad -> ${smoothTurn.toFixed(2)})`);
+  ok(api.minRadius(smoothed) >= api.MIN_RADIUS,
+    `the result respects the minimum turn radius (${api.minRadius(smoothed).toFixed(2)} >= ${api.MIN_RADIUS})`);
+
+  /* stronger smoothing must be monotonically calmer, so the fallback ladder makes sense */
+  const turns = [0, 8, 40].map((cap) =>
+    turning(api.smoothToRadius(api.chaikin(api.simplify(shaky, 0.24), 3), cap)));
+  ok(turns[0] >= turns[1] && turns[1] >= turns[2],
+    `more smoothing is always calmer (${turns.map((v) => v.toFixed(2)).join(' >= ')})`);
+
+  /* and the endpoints must not move, or belts would detach from their ports */
+  const a0 = shaky[0], a1 = shaky[shaky.length - 1];
+  const s0 = smoothed[0], s1 = smoothed[smoothed.length - 1];
+  ok(Math.hypot(s0.x - a0.x, s0.z - a0.z) < 1e-9, 'start point is pinned');
+  ok(Math.hypot(s1.x - a1.x, s1.z - a1.z) < 0.31, 'end point is preserved within a resample step');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 5400);

@@ -32,6 +32,14 @@
   .q.met{border-color:#2f9e6f;background:#1b2f28}
   .q.met .got{color:#5fd0a8}
 
+  #hold{margin-top:6px;height:14px;position:relative;background:#232d33;border:1px solid #334047;
+    border-radius:2px;overflow:hidden}
+  #holdBar{position:absolute;inset:0 auto 0 0;width:0;background:#2f6f4e;transition:width .1s linear}
+  #hold span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:9px;letter-spacing:.04em;color:#cfe3d8}
+  #hold.done #holdBar{background:#2f9e6f}
+  #hold.wait #holdBar{background:#4a5a63}
+
   #tools{position:fixed;right:8px;top:50%;transform:translateY(-50%);z-index:10;
     display:flex;flex-direction:column;gap:5px}
   .tbtn{width:44px;height:44px;border:1px solid var(--line);background:var(--panel);
@@ -50,9 +58,7 @@
   .card .cr{font-family:var(--mono);font-size:9px;color:#6d7570;margin-top:3px;line-height:1.35}
   .card .bar{height:3px;border-radius:2px;margin-bottom:4px}
   #bar2{display:flex;gap:6px;padding:0 8px 7px;align-items:center}
-  #run{flex:1;height:38px;border:0;border-radius:3px;background:var(--ink);color:#f0eee5;
-    font:600 12px/1 var(--ui);letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
-  #run.live{background:var(--block)}
+  .mini.wide{flex:1}
   .mini{height:38px;padding:0 10px;border:1px solid var(--line);background:#f6f4ed;
     border-radius:3px;font:600 10px/1 var(--ui);letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
   .mini.on{background:var(--ink);color:#f0eee5;border-color:var(--ink)}
@@ -128,6 +134,7 @@
     <div id="lvName">—</div>
     <div id="lvHint">—</div>
     <div id="quotas"></div>
+    <div id="hold"><div id="holdBar"></div><span id="holdText"></span></div>
   </div>
 </div>
 <div id="levelBar"></div>
@@ -144,9 +151,9 @@
 <div id="tray">
   <div id="trayScroll"></div>
   <div id="bar2">
-    <button id="run">Run factory</button>
-    <button class="mini" id="plannerBtn">Planner</button>
-    <button class="mini" id="clearBtn">Clear</button>
+    <button class="mini wide" id="plannerBtn">Planner</button>
+    <button class="mini wide" id="scoreBtn">Score</button>
+    <button class="mini wide" id="clearBtn">Clear</button>
   </div>
 </div>
 <div id="report"><div id="rcard"></div></div>
@@ -604,14 +611,15 @@ const STATE_COLOR = {
    together and moves them slower, which is what makes 30/min legible as a pulse
    every two seconds instead of a single object flashing past. */
 const BELT_SPEED = 2.8;        // m/s
-const BELT_HW = 0.21;          // half width
+const BELT_HW = 0.15;          // half width
 const BELT_Y = 0.075;
 const MAX_ITEMS_PER_TYPE = 500;
 const CLEARANCE = 0.34;        // how close a belt may pass a machine or rock
 const STROKE_MIN_STEP = 0.16;  // sampling distance while painting
-const SIMPLIFY_EPS = 0.13;
-const RESAMPLE = 0.34;
-const MIN_RADIUS = 0.85;       // conveyors cannot turn on a dime
+const SIMPLIFY_EPS = 0.24;     // how much finger wobble to discard
+const RESAMPLE = 0.3;
+const MIN_RADIUS = 1.25;       // conveyors cannot turn on a dime
+const SMOOTH_CAPS = [40, 20, 10, 4, 0];  // smoothing passes, strongest tried first
 const SNAP_RADIUS = 2.2;       // how near a port a stroke must start or end
 const BUMP_H = 0.46, BUMP_SIG = 0.62;  // over-under at a crossing
 const ENDPOINT_GUARD = 0.55;   // convergence near a shared port is not a crossing
@@ -623,7 +631,16 @@ let L = null, lvIndex = 0;
 const solved = {};
 let ents = [], links = [], nextId = 1;
 let tool = 'select', pickedType = null, pickedRecipe = null, pickedRot = 0, beltTier = 1;
-let selected = null, result = null, phase = 'edit', runT = 0, spinUp = 0, plannerOn = false;
+let selected = null, result = null, plannerOn = false;
+/* The factory never stops. clockT is a monotonic clock; editT marks the last
+   topology change; steadyAt is when the pipeline will have physically filled.
+   A level is completed by holding quota for HOLD_REQUIRED seconds after that,
+   which is why there is no play button: the verification is the factory simply
+   continuing to work. */
+let clockT = 0, editT = 0, steadyAt = 0, spinUp = 0;
+let holdT = 0, reported = false;
+const HOLD_REQUIRED = 5;
+const phase = 'live';
 let stroke = null;   // { fromEnt, fromPort, pts[] }
 
 /* ============================================================
@@ -732,6 +749,27 @@ function chaikin(pts, iters) {
       const a = p[i], b = p[i + 1];
       out.push({ x: a.x * 0.75 + b.x * 0.25, z: a.z * 0.75 + b.z * 0.25 });
       out.push({ x: a.x * 0.25 + b.x * 0.75, z: a.z * 0.25 + b.z * 0.75 });
+    }
+    out.push(p[p.length - 1]);
+    p = out;
+  }
+  return p;
+}
+
+/* Laplacian smoothing with the endpoints pinned. Chaikin rounds corners but
+   leaves the wander of a dragged finger intact; averaging each interior point
+   against its neighbours is what actually takes the jitter out of a hand-drawn
+   line. */
+function smoothPath(pts, iters) {
+  if (pts.length < 3 || iters <= 0) return pts.slice();
+  let p = pts.map((q) => ({ x: q.x, z: q.z }));
+  for (let k = 0; k < iters; k++) {
+    const out = [p[0]];
+    for (let i = 1; i < p.length - 1; i++) {
+      out.push({
+        x: p[i].x * 0.5 + (p[i - 1].x + p[i + 1].x) * 0.25,
+        z: p[i].z * 0.5 + (p[i - 1].z + p[i + 1].z) * 0.25,
+      });
     }
     out.push(p[p.length - 1]);
     p = out;
@@ -1172,17 +1210,38 @@ function routeBlocked(pts, srcEnt, dstEnt) {
 
 /* Turn a raw finger stroke into a conveyor: simplify, round the corners,
    then keep smoothing until it respects a minimum turn radius. */
-function finishStroke(raw, a, aPort, b, bPort) {
-  const P = { a: portsOf(a).out[aPort], b: portsOf(b).in[bPort] };
-  let pts = [P.a].concat(raw.filter((p) => dist2(p, P.a) > 0.3 * 0.3 && dist2(p, P.b) > 0.3 * 0.3)), out;
-  pts.push(P.b);
-  pts = simplify(pts, SIMPLIFY_EPS);
-  let iters = 2;
-  do {
-    out = resample(chaikin(pts, iters), RESAMPLE);
-    iters++;
-  } while (minRadius(out) < MIN_RADIUS && iters <= 6);
+/* Keep smoothing until the path actually respects the minimum turn radius, rather
+   than applying a fixed amount and hoping. A fixed number of passes leaves shaky
+   input well short of the target, which made MIN_RADIUS decorative. Smoothing is
+   monotonically calmer, so this converges. */
+function smoothToRadius(pts, maxIter) {
+  let p = pts, out = resample(p, RESAMPLE), it = 0;
+  while (it < maxIter && minRadius(out) < MIN_RADIUS) {
+    p = smoothPath(p, 2);
+    it += 2;
+    out = resample(p, RESAMPLE);
+  }
   return out;
+}
+
+function buildPath(raw, a, aPort, b, bPort, maxIter) {
+  const P = { a: portsOf(a).out[aPort], b: portsOf(b).in[bPort] };
+  let pts = [P.a]
+    .concat(raw.filter((p) => dist2(p, P.a) > 0.3 * 0.3 && dist2(p, P.b) > 0.3 * 0.3))
+    .concat([P.b]);
+  pts = simplify(pts, SIMPLIFY_EPS);
+  return smoothToRadius(chaikin(pts, 3), maxIter);
+}
+
+/* Smoothest first, easing off only as far as needed. Heavy smoothing pulls the
+   path away from where the finger actually went, which can push it into an
+   obstacle — so clearance is the hard constraint and smoothness gives way to it. */
+function finishStroke(raw, a, aPort, b, bPort) {
+  for (const cap of SMOOTH_CAPS) {
+    const out = buildPath(raw, a, aPort, b, bPort, cap);
+    if (!routeBlocked(out, a, b)) return out;
+  }
+  return buildPath(raw, a, aPort, b, bPort, 0);   /* commitStroke reports why */
 }
 
 function commitStroke(raw, endPoint, pickedEnd) {
@@ -1417,7 +1476,7 @@ function updateStatus() {
     const e = g.userData.ent;
     const lamp = g.userData.anim && g.userData.anim.lamp;
     if (!e || !lamp) continue;
-    const live = phase !== 'edit' && isLive(e);
+    const live = isLive(e);
     lamp.visible = live;
     if (!live) continue;
     lamp.material.color.setHex(STATE_COLOR[e.state] || 0x8b8f8a);
@@ -1479,7 +1538,7 @@ function ribbon(list, colorFor, withUV) {
       pos.push(p.x + tz * BELT_HW, y, p.z - tx * BELT_HW);
       nrm.push(0, 1, 0, 0, 1, 0);
       col.push(c.r, c.g, c.b, c.r, c.g, c.b);
-      uv.push(arc[i] / 0.6, 0, arc[i] / 0.6, 1);
+      uv.push(arc[i] / 0.45, 0, arc[i] / 0.45, 1);
     }
     for (let i = 0; i < pts.length - 1; i++) {
       const a = base + i * 2;
@@ -1504,13 +1563,9 @@ function buildBelts() {
   const surface = ribbon(links, (l, c) => {
     const tier = BELTS.find((t) => t.id === l.tier) || BELTS[0];
     c.setHex(tier.color);
-    if (phase !== 'edit') {
-      const load = Math.min(1, (l.flow || 0) / l.cap);
-      c.lerp(new THREE.Color(0xffffff), 0.02 + load * 0.34);
-      if (l.saturated && l.overCapacity) c.setHex(0xc2402f);
-    } else {
-      c.lerp(new THREE.Color(0x000000), 0.12);
-    }
+    const load = Math.min(1, (l.flow || 0) / l.cap);
+    c.lerp(new THREE.Color(0xffffff), 0.02 + load * 0.34);
+    if (l.saturated && l.overCapacity) c.setHex(0xc2402f);
   });
   if (surface) {
     const m = new THREE.Mesh(surface, newBeltMat());
@@ -1532,7 +1587,7 @@ function buildBelts() {
         let tx = b.x - a.x, tz = b.z - a.z;
         const tl = Math.hypot(tx, tz) || 1;
         tx /= tl; tz /= tl;
-        rp.push({ x: p.x + (-tz) * side * (BELT_HW + 0.035), z: p.z + tx * side * (BELT_HW + 0.035) });
+        rp.push({ x: p.x + (-tz) * side * (BELT_HW + 0.03), z: p.z + tx * side * (BELT_HW + 0.03) });
         ra.push(arc[i]);
       }
       railGeo.push({ path: rp, arc: ra, bumps: l.bumps, tier: l.tier, off: 0.07 });
@@ -1543,14 +1598,14 @@ function buildBelts() {
   if (railG) {
     /* lift the rails just above the belt surface */
     const p = railG.attributes.position;
-    for (let i = 0; i < p.count; i++) p.setY(i, p.getY(i) + 0.07);
+    for (let i = 0; i < p.count; i++) p.setY(i, p.getY(i) + 0.055);
     railG.attributes.position.needsUpdate = true;
     const m = new THREE.Mesh(railG, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
     m.castShadow = true;
     gBelts.add(m);
   }
   if (legs.length) {
-    const lm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1, 1, 0.1),
+    const lm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.075, 1, 0.075),
       new THREE.MeshLambertMaterial({ color: 0x4c5257 }), legs.length);
     const mx = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3();
     legs.forEach(({ l, s }, i) => {
@@ -1570,12 +1625,12 @@ function buildBelts() {
    Distinct shapes per type. An ore lump and an iron plate should be tellable
    apart while zoomed out, which colour alone does not manage. */
 const ITEM_GEO = {
-  ore:   () => new THREE.IcosahedronGeometry(0.17, 0),
-  ingot: () => new THREE.BoxGeometry(0.3, 0.16, 0.2),
-  plate: () => new THREE.BoxGeometry(0.32, 0.08, 0.24),
-  rod:   () => new THREE.CylinderGeometry(0.07, 0.07, 0.38, 7),
-  screw: () => new THREE.CylinderGeometry(0.06, 0.06, 0.2, 6),
-  reinf: () => new THREE.BoxGeometry(0.34, 0.12, 0.28),
+  ore:   () => new THREE.IcosahedronGeometry(0.14, 0),
+  ingot: () => new THREE.BoxGeometry(0.26, 0.13, 0.17),
+  plate: () => new THREE.BoxGeometry(0.28, 0.07, 0.2),
+  rod:   () => new THREE.CylinderGeometry(0.055, 0.055, 0.32, 7),
+  screw: () => new THREE.CylinderGeometry(0.05, 0.05, 0.17, 6),
+  reinf: () => new THREE.BoxGeometry(0.3, 0.1, 0.24),
 };
 const itemMeshes = {};
 function buildItemPools() {
@@ -1601,7 +1656,7 @@ function posAt(l, s) {
   return {
     x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t,
     z: pts[i - 1].z + (pts[i].z - pts[i - 1].z) * t,
-    y: yAt(l, s) + 0.15,
+    y: yAt(l, s) + 0.13,
   };
 }
 
@@ -1610,7 +1665,7 @@ const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _sc = new THREE.Vec
 function updateItems(t) {
   const counts = {};
   for (const k of Object.keys(itemMeshes)) counts[k] = 0;
-  if (phase !== 'edit') {
+  {
     for (const l of links) {
       if (!l.item || !l.flow || l.flow < 1e-4) continue;
       const mesh = itemMeshes[l.item];
@@ -1646,16 +1701,21 @@ function updateItems(t) {
    SOLVE + SPIN-UP
    ============================================================ */
 function resolve() {
+  const prev = new Map(links.map((l) => [l.id, { flow: l.flow, startT: l.startT }]));
   result = solve({ entities: ents, links });
-  scheduleSpinUp();
+  scheduleSpinUp(prev);
+  editT = clockT;
+  steadyAt = clockT + spinUp;
+  holdT = 0;                 /* the line must run undisturbed to count */
   buildAll();
   refreshQuotas();
   updateRuler();
 }
-function scheduleSpinUp() {
+function scheduleSpinUp(prev) {
   const inL = new Map(ents.map((e) => [e.id, []]));
   for (const l of links) if (inL.has(l.to)) inL.get(l.to).push(l);
   for (const e of ents) e.startT = MACHINES[e.type].kind === 'miner' ? 0.25 : Infinity;
+  const T0 = clockT;
   for (const l of links) l.startT = Infinity;
   let changed = true, guard = 0;
   while (changed && guard++ < 200) {
@@ -1680,8 +1740,20 @@ function scheduleSpinUp() {
   for (const e of ents) if (isFinite(e.startT) && (e.f || 0) > 1e-4) spinUp = Math.max(spinUp, e.startT);
   for (const l of links) if (isFinite(l.startT) && (l.flow || 0) > 1e-4) spinUp = Math.max(spinUp, l.startT + l.length / BELT_SPEED);
   spinUp += 0.35;
+
+  /* Shift the schedule onto the running clock. A belt that already existed and is
+     still carrying the same rate keeps its original start, so it does not visibly
+     restart every time something elsewhere is edited. */
+  for (const e of ents) if (isFinite(e.startT)) e.startT += T0;
+  for (const l of links) {
+    if (!isFinite(l.startT)) continue;
+    const was = prev && prev.get(l.id);
+    const unchanged = was && isFinite(was.startT) && Math.abs((was.flow || 0) - (l.flow || 0)) < 1e-6
+      && T0 >= was.startT + l.length / BELT_SPEED;
+    l.startT = unchanged ? was.startT : l.startT + T0;
+  }
 }
-const isLive = (e) => phase !== 'edit' && isFinite(e.startT) && runT >= e.startT;
+const isLive = (e) => isFinite(e.startT) && clockT >= e.startT;
 function buildAll() { buildMachines(); buildBelts(); buildRings(); }
 
 function beltMetres() { let s = 0; for (const l of links) s += l.length; return s; }
@@ -1740,6 +1812,33 @@ function setTool(t) {
   clear(gGhost);
 }
 
+/* The player needs to know why nothing is being credited yet: still filling, or
+   filling fine but short of quota, or counting down to a pass. */
+function updateHold(settled, met) {
+  const bar = $('#holdBar'), txt = $('#holdText'), box = $('#hold');
+  box.className = '';
+  if (solved[L.id] && holdT >= HOLD_REQUIRED) {
+    box.classList.add('done');
+    bar.style.width = '100%';
+    txt.textContent = 'QUOTA HELD \u2014 COMPLETE';
+    return;
+  }
+  if (!settled) {
+    box.classList.add('wait');
+    const p = Math.max(0, Math.min(1, (clockT - editT) / Math.max(0.001, steadyAt - editT)));
+    bar.style.width = (p * 100).toFixed(0) + '%';
+    txt.textContent = 'LINE FILLING \u2014 ' + Math.max(0, steadyAt - clockT).toFixed(1) + 's';
+    return;
+  }
+  if (!met) {
+    bar.style.width = '0%';
+    txt.textContent = 'BELOW QUOTA';
+    return;
+  }
+  bar.style.width = ((holdT / HOLD_REQUIRED) * 100).toFixed(0) + '%';
+  txt.textContent = 'HOLDING \u2014 ' + holdT.toFixed(1) + ' / ' + HOLD_REQUIRED.toFixed(1) + 's';
+}
+
 function refreshQuotas() {
   const box = $('#quotas');
   box.innerHTML = '';
@@ -1747,10 +1846,10 @@ function refreshQuotas() {
   for (const [item, need] of Object.entries(L.quota)) {
     const have = got[item] || 0;
     const d = document.createElement('div');
-    d.className = 'q' + (have >= need - 1e-4 && phase === 'validated' ? ' met' : '');
+    d.className = 'q' + (have >= need - 1e-4 ? ' met' : '');
     d.innerHTML = '<span class="sw" style="background:#' + ITEMS[item].color.toString(16).padStart(6, '0') + '"></span>'
       + ITEMS[item].name + ' <b>' + need + '</b>/min<span class="got">· '
-      + (phase === 'edit' ? 'idle' : fmt(have)) + '</span>';
+      + fmt(have) + '</span>';
     box.appendChild(d);
   }
 }
@@ -1772,7 +1871,7 @@ function showInspector(e) {
   if (!e) { box.style.display = 'none'; return; }
   const def = MACHINES[e.type], r = recipeOf(e);
   let html = '<h4>' + def.name + (r && def.recipes.length > 1 ? ' · ' + r.label : '') + '</h4>';
-  if (phase !== 'edit' && def.kind !== 'sink' && def.kind !== 'splitter' && def.kind !== 'merger') {
+  if (def.kind !== 'sink' && def.kind !== 'splitter' && def.kind !== 'merger') {
     html += '<div class="row"><span>Running at</span><b style="color:#'
       + (STATE_COLOR[e.state] || 0x888888).toString(16).padStart(6, '0') + '">'
       + Math.round((e.f || 0) * 100) + '%</b></div>';
@@ -1831,7 +1930,7 @@ function showBeltInspector(l) {
     + '<div class="row"><span>Capacity</span><span>' + l.cap + '/min</span></div>'
     + '<div class="row"><span>Length</span><span>' + l.length.toFixed(1) + ' m</span></div>';
   if (l.bumps.length) html += '<div class="row"><span>Crossings</span><span>' + l.bumps.length + ' over</span></div>';
-  if (phase !== 'edit') {
+  {
     html += '<div class="row"><span>Carrying</span><span>' + (l.item ? ITEMS[l.item].short : '—') + '</span></div>'
       + '<div class="row"><span>Load</span><span>' + fmt(l.flow || 0) + ' / ' + l.cap + '</span></div>';
     if (l.overCapacity) html += '<div class="why">Wants ' + fmt(l.potFlow) + '/min. This belt is the bottleneck.</div>';
@@ -1868,11 +1967,7 @@ function updateLabels() {
   for (const e of ents) {
     const def = MACHINES[e.type];
     if (def.kind === 'sink') continue;
-    if (phase === 'edit') {
-      const r = recipeOf(e);
-      if (!r) continue;
-      put(e.x, 1.2, e.z, Object.entries(r.out).map(([k, v]) => v + ' ' + ITEMS[k].short).join('+') + '/min');
-    } else if (isLive(e) && def.kind !== 'splitter' && def.kind !== 'merger') {
+    if (isLive(e) && def.kind !== 'splitter' && def.kind !== 'merger') {
       const pct = Math.round((e.f || 0) * 100);
       const cls = pct >= 100 ? 'ok' : (e.state === 'blocked' ? 'bad' : 'warn');
       let txt = '<b>' + pct + '%</b>';
@@ -1884,11 +1979,8 @@ function updateLabels() {
   for (const l of links) {
     const mid = l.path[Math.floor(l.path.length / 2)];
     if (!mid) continue;
-    if (phase === 'edit') put(mid.x, 0.8, mid.z, l.length.toFixed(1) + ' m · ' + l.cap + ' cap');
-    else {
-      const cls = l.saturated && l.overCapacity ? 'bad' : (l.saturated ? 'warn' : '');
-      put(mid.x, 0.8, mid.z, fmt(l.flow || 0) + ' / ' + l.cap, cls);
-    }
+    const cls = l.saturated && l.overCapacity ? 'bad' : (l.saturated ? 'warn' : '');
+    put(mid.x, 0.8, mid.z, fmt(l.flow || 0) + ' / ' + l.cap, cls);
   }
   for (let i = n; i < labelPool.length; i++) labelPool[i].style.display = 'none';
 }
@@ -1896,28 +1988,11 @@ function updateLabels() {
 /* ============================================================
    RUN
    ============================================================ */
-function startRun() {
-  resolve();
-  phase = 'running'; runT = 0;
-  $('#run').textContent = 'Stop'; $('#run').classList.add('live');
-  setTool('select');
-  buildItemPools(); buildAll();
-  toast('Cold start — ' + spinUp.toFixed(1) + 's to steady state');
+function quotaMet() {
+  const got = (result && result.output) || {};
+  return Object.entries(L.quota).every(([k, v]) => (got[k] || 0) >= v - 1e-4);
 }
-function stopRun() {
-  phase = 'edit'; runT = 0;
-  $('#run').textContent = 'Run factory'; $('#run').classList.remove('live');
-  $('#report').style.display = 'none';
-  buildAll(); refreshQuotas();
-}
-function validate() {
-  phase = 'validated';
-  const got = result.output || {};
-  const met = Object.entries(L.quota).every(([k, v]) => (got[k] || 0) >= v - 1e-4);
-  refreshQuotas(); buildAll();
-  if (met) { solved[L.id] = true; buildLevelBar(); }
-  showReport(met);
-}
+
 function showReport(met) {
   const sc = score({ entities: ents, links }, result);
   const rows = [
@@ -1926,7 +2001,7 @@ function showReport(met) {
     ['Ore', Math.round(sc.ore), L.par.ore, 'raw ore per minute'],
   ];
   let html = '<h3>' + (met ? 'Quota met' : 'Quota not met') + '</h3>'
-    + '<div class="sub">' + L.name + ' · steady state in ' + spinUp.toFixed(1) + 's</div>';
+    + '<div class="sub">' + L.name + ' · line fills in ' + spinUp.toFixed(1) + 's · quota held ' + HOLD_REQUIRED + 's</div>';
   if (!met) {
     const got = result.output || {};
     html += '<div class="sub">Output: ' + Object.entries(L.quota)
@@ -1953,7 +2028,7 @@ function showReport(met) {
   card.innerHTML = html;
   card.querySelectorAll('button').forEach((b) => b.onclick = () => {
     $('#report').style.display = 'none';
-    if (b.dataset.a === 'next') loadLevel(lvIndex + 1); else stopRun();
+    if (b.dataset.a === 'next') loadLevel(lvIndex + 1);
   });
   $('#report').style.display = 'flex';
 }
@@ -2148,7 +2223,7 @@ function drawStrokePreview() {
   clear(gGhost);
   const a = stroke.fromEnt;
   const start = portsOf(a).out[stroke.fromPort];
-  const pts = resample(chaikin(simplify([start].concat(stroke.pts), SIMPLIFY_EPS), 2), RESAMPLE);
+  const pts = smoothToRadius(chaikin(simplify([start].concat(stroke.pts), SIMPLIFY_EPS), 3), 40);
   if (pts.length < 2) return;
   const bad = routeBlocked(pts, a, entAt(pts[pts.length - 1]));
   const fake = { path: pts, arc: arcTable(pts), tier: beltTier, bumps: [] };
@@ -2218,12 +2293,13 @@ $('#tiltBtn').onclick = () => {
   pitchTarget = PITCH_STEPS[pitchIdx];
   toast('Tilt ' + Math.round(PITCH_STEPS[pitchIdx] * 180 / Math.PI) + '\u00b0');
 };
-$('#run').onclick = () => (phase === 'edit' ? startRun() : stopRun());
 $('#plannerBtn').onclick = () => { plannerOn = !plannerOn; $('#plannerBtn').classList.toggle('on', plannerOn); };
+$('#scoreBtn').onclick = () => showReport(quotaMet());
 $('#clearBtn').onclick = () => {
   ents = ents.filter((e) => MACHINES[e.type].kind === 'sink');
   links = []; selected = null; showInspector(null);
-  stopRun(); resolve();
+  $('#report').style.display = 'none';
+  resolve();
 };
 addEventListener('resize', layoutCamera);
 
@@ -2235,9 +2311,9 @@ function loadLevel(i) {
   L = LEVELS[lvIndex];
   ents = []; links = []; nextId = 1;
   selected = null; stroke = null; result = null;
-  phase = 'edit'; runT = 0; plannerOn = false;
+  plannerOn = false;
+  clockT = 0; editT = 0; steadyAt = 0; holdT = 0; reported = !!solved[L.id];
   $('#plannerBtn').classList.remove('on');
-  $('#run').textContent = 'Run factory'; $('#run').classList.remove('live');
   $('#report').style.display = 'none';
   showInspector(null);
 
@@ -2271,7 +2347,7 @@ function animateMachines(t) {
     const e = g.userData.ent;
     const a = g.userData.anim;
     if (!e || !a) continue;
-    const f = (phase !== 'edit' && isLive(e)) ? (e.f || 0) : 0;
+    const f = isLive(e) ? (e.f || 0) : 0;
     if (a.drum) a.drum.rotation.x = t * f * 5.5;
     if (a.press) a.press.position.y = 1.05 - (f > 0 ? Math.abs(Math.sin(t * f * 3.4)) * 0.3 : 0);
     if (a.arms) a.arms.forEach((arm, i) => {
@@ -2294,27 +2370,35 @@ function animateMachines(t) {
   }
 }
 
-let last = performance.now(), clock = 0;
+let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  clock += dt;
   if (Math.abs(yawTarget - yaw) > 1e-4) yaw += (yawTarget - yaw) * Math.min(1, dt * 9);
   if (Math.abs(pitchTarget - pitch) > 1e-4) pitch += (pitchTarget - pitch) * Math.min(1, dt * 8);
   if (!cameraIsSane()) { resetView(); toast('View reset.'); }
   placeCamera();
-  if (phase === 'running') {
-    runT += dt;
-    if (runT >= spinUp) validate();
+  clockT += dt;
+
+  /* Verification is just the factory continuing to work. Once the pipeline has
+     physically filled, holding quota for HOLD_REQUIRED seconds completes the
+     level; breaking it resets the timer. */
+  const settled = clockT >= steadyAt;
+  const met = quotaMet();
+  if (settled && met) holdT += dt; else holdT = 0;
+  updateHold(settled, met);
+  if (holdT >= HOLD_REQUIRED && !reported) {
+    reported = true;
+    solved[L.id] = true;
+    buildLevelBar();
+    refreshQuotas();
+    showReport(true);
   }
-  if (phase !== 'edit') {
-    updateRings();
-    /* one shared scroll: visual belt speed is constant by design, and 0.9 is the
-       texture's world period in metres */
-    BELT_TEX.offset.x = -(runT * BELT_SPEED) / 0.6;
-  }
-  animateMachines(clock);
-  updateItems(runT);
+
+  updateStatus();
+  BELT_TEX.offset.x = -(clockT * BELT_SPEED) / 0.6;
+  animateMachines(clockT);
+  updateItems(clockT);
   updateLabels();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
