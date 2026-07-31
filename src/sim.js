@@ -153,16 +153,31 @@ function solve(state) {
   const accept = new Map(ents.map((e) => [e.id, 1]));
   for (const e of ents) e.f = 1;
 
+  const revOrder = order.slice().reverse();
   for (let iter = 0; iter < 60; iter++) {
-    /* demand: a machine pulls inputs in proportion to how fast it is really running */
+    /* Demand pass, walked in reverse topological order so that a passthrough knows
+       what its own outputs will actually accept before it states its demand.
+       Summing raw capacities instead was a conservation bug: a splitter with one
+       branch wired asked for everything its belts could carry, the miner happily
+       ran at 100%, and the surplus simply disappeared at the splitter with no
+       indication that half the node was being thrown away. */
     const demand = new Map();
-    for (const e of ents) {
+    for (const id of revOrder) {
+      const e = byId.get(id);
       const def = MACHINES[e.type];
       const d = {};
       if (def.kind === 'sink') d['*'] = Infinity;
       else if (def.kind === 'splitter' || def.kind === 'merger') {
         let onward = 0;
-        for (const l of outLinks.get(e.id)) onward += l.cap;
+        for (const l of outLinks.get(e.id)) {
+          const dest = byId.get(l.to);
+          const dd = (dest && demand.get(dest.id)) || {};
+          let want;
+          if (dd['*'] != null) want = dd['*'];
+          else if (l.item != null) want = dd[l.item] || 0;
+          else want = l.cap;          /* nothing has flowed yet: assume it will fit */
+          onward += Math.min(l.cap, want);
+        }
         d['*'] = onward;
       } else {
         const r = recipeOf(e);
@@ -351,9 +366,14 @@ function score(state, result) {
     if (def.kind !== 'sink') footprint += def.w * def.h;
   }
   for (const l of state.links) footprint += (l.path ? l.path.length : 0);
+  /* What the node actually gives up, not the miner's nameplate rate. A miner whose
+     belt is backed up is drawing less, and the ore metric is supposed to reward
+     not wasting the deposit. */
   let ore = 0;
   for (const e of state.entities) {
-    if (MACHINES[e.type].kind === 'miner') ore += (e.offer && e.offer.ore) || 0;
+    if (MACHINES[e.type].kind !== 'miner') continue;
+    const nominal = (e.offer && e.offer.ore) || 0;
+    ore += nominal * (e.f == null ? 1 : Math.max(0, Math.min(1, e.f)));
   }
   return { machines, footprint, ore };
 }

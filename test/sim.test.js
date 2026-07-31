@@ -101,5 +101,50 @@ console.log('\n— multi-output level, rung 4: shared ore node —');
   console.log('  a 60/min node splits evenly into 30+30 ingots — both lines at 100%');
 }
 
+
+console.log('\n— conservation across passthroughs —');
+{
+  let k = 0;
+  const E = (t, r, x) => Object.assign({ id: 'c' + (++k), type: t, recipe: r }, x || {});
+  const ents = [
+    E('miner', 'mine', { nodeRate: 60 }), E('splitter', null),
+    E('smelter', 'ingot'), E('sink', null),
+  ];
+  const [m, sp, sm, dp] = ents;
+  const links = [
+    { id: 'k1', from: m.id, to: sp.id, cap: 60, path: [], length: 5 },
+    { id: 'k2', from: sp.id, to: sm.id, cap: 60, path: [], length: 5 },
+    { id: 'k3', from: sm.id, to: dp.id, cap: 60, path: [], length: 5 },
+  ];
+  const st = { entities: ents, links };
+  const res = solve(st);
+  near(links[0].flow, links[1].flow, 'splitter conserves mass: in equals out');
+  near(m.f, 0.5, 'a miner feeding a half-used splitter runs at 50%');
+  eq(m.state, 'blocked', 'and reads as blocked, not running');
+  near(score(st, res).ore, 30, 'the ore metric reports what the node actually gives up');
+}
+
+console.log('\n— a fully wired splitter uses the whole node —');
+{
+  let k = 0;
+  const E = (t, r, x) => Object.assign({ id: 'd' + (++k), type: t, recipe: r }, x || {});
+  const ents = [
+    E('miner', 'mine', { nodeRate: 60 }), E('splitter', null),
+    E('smelter', 'ingot'), E('smelter', 'ingot'),
+    E('constructor', 'plate'), E('constructor', 'rod'), E('sink', null),
+  ];
+  const [m, sp, s1, s2, cP, cR, dp] = ents;
+  const L = (a, b) => ({ id: 'x' + (++k), from: a.id, to: b.id, cap: 60, path: [], length: 5 });
+  const links = [L(m, sp), L(sp, s1), L(sp, s2), L(s1, cP), L(s2, cR), L(cP, dp), L(cR, dp)];
+  const st = { entities: ents, links };
+  const res = solve(st);
+  near(res.output.plate || 0, 20, 'level 5 par: 20 plates/min');
+  near(res.output.rod || 0, 30, 'level 5 par: 30 rods/min');
+  near(m.f, 1, 'the miner runs flat out');
+  near(score(st, res).ore, 60, 'the whole 60/min node is used');
+  near(links[1].flow, 30, 'splitter sends 30 down one branch');
+  near(links[2].flow, 30, 'and 30 down the other');
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
