@@ -117,7 +117,7 @@ const exports_ = ['loadLevel','addEntity','resolve','startRun','scene','camera',
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
-  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getResult: function(){return result;},'
+  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
@@ -470,3 +470,68 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 2900);
+
+/* --- gesture transitions must not jump ---
+   Lifting one finger of a pinch used to leave the pan baseline at the finger's
+   original touch point, so the camera slammed across by the whole pinch distance
+   the moment the gesture changed. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- gesture transitions ---');
+
+  api.loadLevel(0);
+  const cv = api.renderer.domElement;
+  const down = (id, x, y) => cv.fire('pointerdown', { pointerId: id, clientX: x, clientY: y });
+  const move = (id, x, y) => cv.fire('pointermove', { pointerId: id, clientX: x, clientY: y });
+  const up   = (id, x, y) => cv.fire('pointerup',   { pointerId: id, clientX: x, clientY: y });
+
+  api.setZoom(22);
+
+  /* pinch wide apart, then lift one finger and hold the other still */
+  down(1, 200, 400); down(2, 220, 400);
+  move(1, 60, 400); move(2, 360, 400);          // fingers travel ~140px each
+  const camMid = api.getCam();
+  up(2, 360, 400);                              // one finger lifts
+  move(1, 60, 400);                             // the other does not move at all
+  const camAfter = api.getCam();
+  const jump = Math.hypot(camAfter.x - camMid.x, camAfter.z - camMid.z);
+  ok(jump < 0.01, `no camera jump when a finger lifts mid-pinch (moved ${jump.toFixed(3)} m)`);
+
+  /* continuing to drag that finger should pan smoothly and proportionally */
+  move(1, 100, 400);                            // 40px
+  const camPan = api.getCam();
+  const panDist = Math.hypot(camPan.x - camAfter.x, camPan.z - camAfter.z);
+  ok(panDist > 0.05 && panDist < 6, `panning afterwards is proportional (${panDist.toFixed(2)} m for 40px)`);
+  up(1, 100, 400);
+  ok(api.getPointerCount() === 0 && api.getDragMode() === null, 'gesture fully cleared');
+  ok(api.getPinched() === false, 'pinch flag cleared once all fingers are up');
+
+  /* a pinch must never be mistaken for a tap: arm the place tool and check
+     that lifting both fingers does not build anything */
+  api.setTool('place');
+  const before = api.ents().length;
+  down(1, 180, 420); down(2, 240, 420);
+  move(1, 140, 420); move(2, 280, 420);
+  up(1, 140, 420);
+  up(2, 280, 420);
+  ok(api.ents().length === before, 'a pinch does not place a machine on release');
+
+  /* 3 fingers down to 2 should not lurch the zoom either */
+  api.setZoom(22);
+  down(1, 150, 400); down(2, 250, 400); down(3, 200, 600);
+  const zBefore = api.getZoom();
+  up(3, 200, 600);
+  move(1, 150, 400); move(2, 250, 400);         // neither remaining finger moved
+  const zAfter = api.getZoom();
+  ok(Math.abs(zAfter - zBefore) < 0.01, `no zoom lurch going 3 fingers to 2 (${zBefore.toFixed(2)} -> ${zAfter.toFixed(2)})`);
+  up(1, 150, 400); up(2, 250, 400);
+
+  /* and an ordinary single tap must still work */
+  api.setTool('select');
+  down(1, 200, 400); up(1, 200, 400);
+  ok(api.getDragMode() === null, 'a plain tap still completes cleanly');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 3400);

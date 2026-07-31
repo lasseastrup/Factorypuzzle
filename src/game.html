@@ -1602,8 +1602,32 @@ const pointers = new Map();
    landing during a pinch assigned the Vector3 while the pinch was still active,
    and Vector3 * number is NaN. That poisoned the zoom permanently and left the
    camera frustum non-finite, so nothing rendered but the sky. */
-let dragMode = null, dragStart = null, pinchStart = 0, moved = 0;
+let dragMode = null, dragStart = null, pinchStart = 0, moved = 0, pinched = false;
 let panStart = new THREE.Vector3(), zoomStart = 0;
+
+/* Every gesture is measured against a baseline: pinch against a starting finger
+   distance, pan against a starting touch point. When the number of fingers
+   changes mid-gesture those baselines are stale, and using them applies the whole
+   accumulated delta in one jump — a pinch that pans wildly the moment a finger
+   lifts. Re-baseline on every change instead. */
+function rebaseGesture() {
+  const p = [...pointers.values()];
+  if (p.length >= 2) {
+    pinchStart = Math.max(1, Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y));
+    zoomStart = zoom;
+    dragMode = 'pinch';
+    pinched = true;
+  } else if (p.length === 1) {
+    /* keep panning from where the remaining finger is now, the way a map does */
+    dragStart = { x: p[0].x, y: p[0].y };
+    panStart.copy(camCenter);
+    moved = 0;
+    dragMode = 'maybe';
+  } else {
+    dragMode = null;
+    pinched = false;
+  }
+}
 
 let zoomMin = 8, zoomMax = 80;
 function setZoom(v) {
@@ -1637,9 +1661,7 @@ cv.addEventListener('pointerdown', (ev) => {
   pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
   moved = 0;
   if (pointers.size >= 2) {
-    const p = [...pointers.values()];
-    pinchStart = Math.max(1, Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y));
-    dragMode = 'pinch'; zoomStart = zoom;
+    rebaseGesture();
     stroke = null; clear(gGhost);
     return;
   }
@@ -1707,7 +1729,9 @@ cv.addEventListener('pointermove', (ev) => {
 });
 
 cv.addEventListener('pointerup', (ev) => {
-  const wasTap = moved < 9 && pointers.size === 1;
+  /* a pinch must never end up counting as a tap: re-baselining resets `moved`, so
+     without this flag lifting the last finger would place a machine */
+  const wasTap = !pinched && moved < 9 && pointers.size === 1 && dragMode !== 'pinch';
   const painting = dragMode === 'paint' && stroke;
   const g = groundAt(ev.clientX, ev.clientY);
   pointers.delete(ev.pointerId);
@@ -1716,20 +1740,20 @@ cv.addEventListener('pointerup', (ev) => {
     if (stroke.pts.length >= 1 && g) commitStroke(stroke.pts, g);
     else toast('Drag from one machine to another to lay a belt.');
     stroke = null;
-  } else if (wasTap && g) {
-    handleTap(g);
+    if (!pointers.size) { dragMode = null; pinched = false; }
+    return;
   }
-  if (pointers.size < 2 && dragMode === 'pinch') dragMode = null;
-  if (!pointers.size) dragMode = null;
+  if (wasTap && g) handleTap(g);
+  rebaseGesture();
 });
 cv.addEventListener('pointercancel', (ev) => {
   pointers.delete(ev.pointerId);
-  if (!pointers.size) dragMode = null;
   stroke = null; clear(gGhost);
+  rebaseGesture();
 });
 /* a finger that leaves the surface without a pointerup would otherwise linger in
    the map forever and make every later single touch look like a pinch */
-addEventListener('blur', () => { pointers.clear(); dragMode = null; stroke = null; });
+addEventListener('blur', () => { pointers.clear(); stroke = null; rebaseGesture(); });
 cv.addEventListener('wheel', (ev) => {
   ev.preventDefault();
   setZoom(zoom * (1 + Math.sign(ev.deltaY) * 0.09));
