@@ -466,9 +466,13 @@ function placeCamera() {
   scene.background = t;
 })();
 
-scene.add(new THREE.HemisphereLight(0xdce9f2, 0x6d6a54, 0.72));
+/* Intensities are chosen so that hemisphere + sun + fill on an up-facing surface
+   sums to just under 1.0. Stacking them past that silently clips every pale
+   surface to pure white, which is what happened to the concrete slab.
+   test/harness.js asserts the sum, so it cannot drift again unnoticed. */
+scene.add(new THREE.HemisphereLight(0xdce9f2, 0x6d6a54, 0.45));
 
-const sun = new THREE.DirectionalLight(0xfff2d8, 1.05);
+const sun = new THREE.DirectionalLight(0xfff2d8, 0.68);
 sun.castShadow = true;
 sun.shadow.mapSize.set(1024, 1024);
 sun.shadow.bias = -0.0006;
@@ -477,7 +481,7 @@ scene.add(sun);
 scene.add(sun.target);
 
 /* a dim fill from the opposite side so shadowed faces do not go to mud */
-const fill = new THREE.DirectionalLight(0xc8d8e8, 0.28);
+const fill = new THREE.DirectionalLight(0xc8d8e8, 0.10);
 fill.position.set(16, 14, -12);
 scene.add(fill);
 
@@ -531,7 +535,7 @@ function buildPad() {
   /* ---- concrete slab: the buildable plot, with a chamfered rim ---- */
   const slabH = 0.55;
   const slab = new THREE.Mesh(new THREE.BoxGeometry(L.w, slabH, L.h),
-    new THREE.MeshLambertMaterial({ color: 0xd7d4c6 }));
+    new THREE.MeshLambertMaterial({ color: 0xc6c3b4 }));
   slab.position.set(L.w / 2, -slabH / 2 + 0.02, L.h / 2);
   slab.receiveShadow = true;
   gPad.add(slab);
@@ -893,7 +897,7 @@ function yAt(l, s) {
    Moving parts are stashed on userData so the frame loop can animate them
    without rebuilding geometry. */
 const MAT = (c) => new THREE.MeshLambertMaterial({ color: c });
-const STEEL = 0xd9d5c6, DARK = 0x272c2e, TRIM = 0xb0a893;
+const STEEL = 0xc9c5b6, DARK = 0x272c2e, TRIM = 0xa39b86;
 
 function part(group, geo, mat, x, y, z, shadow) {
   const m = new THREE.Mesh(geo, mat);
@@ -992,7 +996,7 @@ function buildMachines() {
     P.in.forEach((p, i) => {
       const item = P.inItems[i];
       part(g, new THREE.BoxGeometry(0.36, 0.2, 0.28),
-        MAT(item ? ITEMS[item].color : 0xe7e3d6), p.x, 0.32, p.z);
+        MAT(item ? ITEMS[item].color : 0xd2cdbe), p.x, 0.32, p.z);
     });
 
     if (e === selected) {

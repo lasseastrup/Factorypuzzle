@@ -346,3 +346,59 @@ setTimeout(() => {
   }
   console.log(`\n${p} passed, ${f} failed`);
 }, 1900);
+
+/* --- exposure audit ---
+   Lambert output is base colour times incoming light. If the lights sum past 1.0,
+   every pale surface clips to pure white and no amount of colour tuning helps.
+   This is not visible to any of the other checks and was a real bug. */
+setTimeout(() => {
+  const THREE = require('three');
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- exposure ---');
+
+  api.loadLevel(0);
+  api.frame(performance.now());
+
+  let hemi = null; const dirs = [];
+  api.scene.traverse((o) => {
+    if (o.isHemisphereLight) hemi = o;
+    else if (o.isDirectionalLight) dirs.push(o);
+  });
+  const up = new THREE.Vector3(0, 1, 0);
+  const tot = new THREE.Color(0, 0, 0);
+  if (hemi) tot.add(hemi.color.clone().multiplyScalar(hemi.intensity));
+  for (const d of dirs) {
+    d.updateMatrixWorld(true);
+    const dir = d.position.clone();
+    if (d.target) dir.sub(d.target.position);
+    dir.normalize();
+    tot.add(d.color.clone().multiplyScalar(d.intensity * Math.max(0, dir.dot(up))));
+  }
+  const peak = Math.max(tot.r, tot.g, tot.b);
+  ok(peak <= 1.05, `irradiance on an up-facing surface stays within range (peak ${peak.toFixed(2)})`);
+
+  const clipping = [];
+  const seen = new Set();
+  api.scene.traverse((o) => {
+    if (!o.isMesh || !o.material || !o.material.color) return;
+    const m = o.material;
+    if (m.isMeshBasicMaterial) return;              // unlit: renders as its own colour
+    if (seen.has(m.uuid)) return;
+    seen.add(m.uuid);
+    const base = m.color.clone();
+    const ca = o.geometry && o.geometry.attributes && o.geometry.attributes.color;
+    if (m.vertexColors && ca) {
+      let r = 0, g = 0, b = 0;
+      for (let i = 0; i < ca.count; i++) { r += ca.getX(i); g += ca.getY(i); b += ca.getZ(i); }
+      base.multiply(new THREE.Color(r / ca.count, g / ca.count, b / ca.count));
+    }
+    const out = Math.max(base.r * tot.r, base.g * tot.g, base.b * tot.b);
+    if (out >= 0.995) clipping.push('#' + m.color.getHexString() + ' -> ' + out.toFixed(2));
+  });
+  ok(clipping.length === 0, 'no lit surface clips to white'
+    + (clipping.length ? '  OFFENDERS: ' + clipping.join(', ') : ''));
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 2400);
