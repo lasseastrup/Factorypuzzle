@@ -132,7 +132,9 @@ With arithmetic assisted, the difficulty budget shifts onto the axes the overlay
 
 This is a healthier difficulty profile for mobile anyway: spatial reasoning survives interruption and small screens better than arithmetic held in working memory does. But it does mean **level design carries more weight than it would have**, and the prototype's five levels must be authored with that in mind.
 
-### 5.6 Byproducts and stalls
+### 5.6 Backpressure, byproducts and stalls
+
+**A belt that cannot deliver fills up.** Material goes onto it the moment it exists — a miner does not wait for the line to be finished downstream — and queues against the blocked end until the belt is full, at which point the miner reads as *blocked* rather than *stopped*. This matters more than it sounds: rendering a stalled belt as empty tells the player the miner is idle, which is the opposite of the truth. A visibly backed-up belt points at the real problem, which is somewhere further along.
 
 From act 2, some recipes emit a secondary output. If a byproduct isn't consumed or sunk, the machine's output blocks and the whole line stalls. This converts the game from "chain builder" to "system balancer" and is where the real difficulty lives. Sinks (incinerators) exist but cost score — the clean solution loops the byproduct back into something useful.
 
@@ -303,7 +305,7 @@ These are genuinely in tension: the ore-optimal solution usually needs more mach
 | Delete | long-press, or dedicated erase mode for bulk |
 | Inspect | tap |
 
-Camera is orthographic with **three fixed tilt steps — 36°, 44°, 54° above the horizon, defaulting to 44°**. A shallower angle shows the solidity of the world and makes the over-under at belt crossings legible; a steeper one keeps belt routes clear because tall machines occlude less. Still **no free orbit** — that destroys the readability of belt paths and makes drag-to-place ambiguous. Yaw is snapped to 90° only.
+Camera is orthographic at a **fixed 54° above the horizon**. (Three tilt steps were prototyped; 54° won on a phone — shallower looked better in stills but tall machines began hiding belts behind them.) A shallower angle shows the solidity of the world and makes the over-under at belt crossings legible; a steeper one keeps belt routes clear because tall machines occlude less. Still **no free orbit** — that destroys the readability of belt paths and makes drag-to-place ambiguous. Yaw is snapped to 90° only.
 
 Two consequences of an oblique view that are easy to get wrong:
 

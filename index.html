@@ -144,7 +144,6 @@
   <button class="tbtn" data-tool="erase">Erase</button>
   <button class="tbtn" id="rotBtn">Turn 90&deg;</button>
   <button class="tbtn" id="camBtn">Rotate view</button>
-  <button class="tbtn" id="tiltBtn">Tilt</button>
 </div>
 <div id="ruler"></div>
 <div id="insp"></div>
@@ -290,7 +289,7 @@ function solve(state) {
 
   const outLinks = new Map(ents.map((e) => [e.id, []]));
   const inLinks = new Map(ents.map((e) => [e.id, []]));
-  for (const l of links) { l.flow = 0; l.potFlow = 0; l.item = null; }
+  for (const l of links) { l.flow = 0; l.potFlow = 0; l.want = 0; l.item = null; }
   for (const l of links) {
     if (!byId.has(l.from) || !byId.has(l.to)) continue;
     outLinks.get(l.from).push(l);
@@ -361,7 +360,7 @@ function solve(state) {
     }
 
     for (const e of ents) avail.set(e.id, {});
-    for (const l of links) { l.flow = 0; l.item = null; }
+    for (const l of links) { l.flow = 0; l.want = 0; l.item = null; }
 
     for (const id of order) {
       const e = byId.get(id);
@@ -405,6 +404,14 @@ function solve(state) {
           return Math.max(0, Math.min(l.cap - (l.flow || 0), want - other));
         });
         const alloc = waterfill(amount, caps);
+        /* What the source wanted to push, regardless of what was accepted. A belt
+           whose destination cannot take delivery still has ore put onto it — it
+           backs up rather than staying empty — and the renderer needs both the
+           attempt and the outcome to show that. */
+        const share = amount / Math.max(1, outs.length);
+        outs.forEach((l) => {
+          if (l.item == null || l.item === item) { l.item = item; l.want = (l.want || 0) + share; }
+        });
         outs.forEach((l, k) => {
           if (alloc[k] <= EPS) return;
           l.flow = (l.flow || 0) + alloc[k];
@@ -495,6 +502,7 @@ function classify(e, def, outs) {
   if (def.kind === 'splitter' || def.kind === 'merger' || def.kind === 'sink') return 'passive';
   const r = recipeOf(e);
   if (!r) return 'idle';
+  if (def.kind === 'miner' && e.f <= EPS) return outs.length ? 'blocked' : 'idle';
   if (e.f <= EPS) return 'stopped';
   if (e.f > 0.9999) return 'running';
   for (const l of outs) if (l.saturated && l.overCapacity) return 'blocked';
@@ -610,10 +618,11 @@ const STATE_COLOR = {
    set to. Lowering it does not lie about throughput — it just spaces items closer
    together and moves them slower, which is what makes 30/min legible as a pulse
    every two seconds instead of a single object flashing past. */
-const BELT_SPEED = 2.8;        // m/s
+const BELT_SPEED = 1.9;        // m/s
 const BELT_HW = 0.15;          // half width of the moving surface
 const RAIL_HW = 0.035;         // side rails are strips, not more belt
 const BELT_TEX_PERIOD = 0.38;  // metres per cleat
+const JAM_SPACING = 0.42;      // packed spacing when a belt has backed up
 const BELT_Y = 0.075;
 const MAX_ITEMS_PER_TYPE = 500;
 const CLEARANCE = 0.34;        // how close a belt may pass a machine or rock
@@ -838,7 +847,7 @@ document.body.appendChild(renderer.domElement);
    solidity of the world; higher keeps belt routes legible because tall machines
    occlude less. Three fixed steps, no free orbit (§10). */
 const PITCH_STEPS = [36, 44, 54].map((d) => d * Math.PI / 180);
-let pitchIdx = 1, pitch = PITCH_STEPS[pitchIdx], pitchTarget = pitch;
+let pitchIdx = 2, pitch = PITCH_STEPS[pitchIdx], pitchTarget = pitch;
 let yaw = 0, yawTarget = 0, zoom = 34, camCenter = new THREE.Vector3(7, 0, 7);
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
 
@@ -1679,6 +1688,25 @@ function posAt(l, s) {
   };
 }
 
+/* A belt whose destination will not take delivery still has material put onto it.
+   It backs up: items pile against the blocked end and stop. Rendering nothing in
+   that case is worse than wrong, it is misleading — the player sees an empty belt
+   and assumes the miner is idle, when the truth is the far end is the problem. */
+function updateJams(dt) {
+  for (const l of links) {
+    const want = l.want || 0, flow = l.flow || 0;
+    if (l.jamLen == null) l.jamLen = 0;
+    const filled = isFinite(l.startT) && clockT >= l.startT + l.length / BELT_SPEED;
+    const excess = want - flow;
+    if (excess > 1e-4 && filled) {
+      /* the queue grows by one item-space for every item that cannot leave */
+      l.jamLen = Math.min(l.length, l.jamLen + (excess / 60) * JAM_SPACING * dt);
+    } else if (l.jamLen > 0) {
+      l.jamLen = Math.max(0, l.jamLen - BELT_SPEED * dt);
+    }
+  }
+}
+
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _sc = new THREE.Vector3(1, 1, 1),
       _v = new THREE.Vector3(), _e = new THREE.Euler();
 function updateItems(t) {
@@ -1686,19 +1714,16 @@ function updateItems(t) {
   for (const k of Object.keys(itemMeshes)) counts[k] = 0;
   {
     for (const l of links) {
-      if (!l.item || !l.flow || l.flow < 1e-4) continue;
+      if (!l.item) continue;
       const mesh = itemMeshes[l.item];
       if (!mesh) continue;
       const len = l.length;
-      /* Spacing is never adjusted to fit a budget: shrinking it would make the
-         belt appear to carry more than it does. If a belt would exceed the pool,
-         we simply stop drawing further items instead of lying about the rate. */
-      const spacing = BELT_SPEED * 60 / l.flow;
-      const front = (t - (l.startT || 0)) * BELT_SPEED;
-      if (front <= 0) continue;
+      const jam = Math.min(len, l.jamLen || 0);
+      const freeLen = Math.max(0, len - jam);
       const lie = l.item === 'rod' || l.item === 'screw';   /* cylinders lie down */
-      for (let s = front % spacing; s <= Math.min(len, front); s += spacing) {
-        if (counts[l.item] >= MAX_ITEMS_PER_TYPE) break;
+
+      const place = (s) => {
+        if (counts[l.item] >= MAX_ITEMS_PER_TYPE) return false;
         const p = posAt(l, s);
         const q = posAt(l, Math.min(len, s + 0.25));
         const head = Math.atan2(q.x - p.x, q.z - p.z);
@@ -1707,6 +1732,22 @@ function updateItems(t) {
         _v.set(p.x, p.y, p.z);
         _m.compose(_v, _q, _sc);
         mesh.setMatrixAt(counts[l.item]++, _m);
+        return true;
+      };
+
+      /* stationary queue packed against the blocked end */
+      for (let s = len; s > freeLen; s -= JAM_SPACING) if (!place(s)) break;
+
+      /* and whatever is still moving, on the stretch that is not yet queued */
+      const moving = (l.flow || 0) > 1e-4 ? l.flow : ((l.want || 0) > 1e-4 && jam < len ? l.want : 0);
+      if (moving > 1e-4) {
+        /* Spacing is never adjusted to fit a budget: shrinking it would make the
+           belt appear to carry more than it does. */
+        const spacing = BELT_SPEED * 60 / moving;
+        const front = (t - (l.startT || 0)) * BELT_SPEED;
+        if (front > 0) {
+          for (let s = front % spacing; s <= Math.min(freeLen, front); s += spacing) if (!place(s)) break;
+        }
       }
     }
   }
@@ -1724,7 +1765,17 @@ function resolve() {
   result = solve({ entities: ents, links });
   scheduleSpinUp(prev);
   editT = clockT;
-  steadyAt = clockT + spinUp;
+  /* When the last belt actually finishes filling, using the shifted schedule. A
+     belt that was already running keeps its old start, so editing one corner of a
+     factory no longer makes the player wait out a full cold start again. */
+  steadyAt = clockT;
+  for (const l of links) {
+    if (!isFinite(l.startT) || (l.flow || 0) <= 1e-4) continue;
+    steadyAt = Math.max(steadyAt, l.startT + l.length / BELT_SPEED);
+  }
+  for (const e of ents) if (isFinite(e.startT) && (e.f || 0) > 1e-4) steadyAt = Math.max(steadyAt, e.startT);
+  steadyAt += 0.35;
+  spinUp = steadyAt - clockT;
   holdT = 0;                 /* the line must run undisturbed to count */
   buildAll();
   refreshQuotas();
@@ -2307,11 +2358,6 @@ $('#rotBtn').onclick = () => {
   }
 };
 $('#camBtn').onclick = () => { yawTarget += Math.PI / 2; };
-$('#tiltBtn').onclick = () => {
-  pitchIdx = (pitchIdx + 1) % PITCH_STEPS.length;
-  pitchTarget = PITCH_STEPS[pitchIdx];
-  toast('Tilt ' + Math.round(PITCH_STEPS[pitchIdx] * 180 / Math.PI) + '\u00b0');
-};
 $('#plannerBtn').onclick = () => { plannerOn = !plannerOn; $('#plannerBtn').classList.toggle('on', plannerOn); };
 $('#scoreBtn').onclick = () => showReport(quotaMet());
 $('#clearBtn').onclick = () => {
@@ -2391,7 +2437,10 @@ function animateMachines(t) {
 
 let last = performance.now();
 function frame(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  /* Clamped at both ends. A timestamp that goes backwards would drive clockT
+     negative and stall every belt, and a long pause between frames should not
+     teleport the simulation forward. */
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
   last = now;
   if (Math.abs(yawTarget - yaw) > 1e-4) yaw += (yawTarget - yaw) * Math.min(1, dt * 9);
   if (Math.abs(pitchTarget - pitch) > 1e-4) pitch += (pitchTarget - pitch) * Math.min(1, dt * 8);
@@ -2415,6 +2464,7 @@ function frame(now) {
   }
 
   updateStatus();
+  updateJams(dt);
   /* The surface must scroll at exactly the speed items travel, or the belt looks
      like it is slipping under its own cargo. One period of texture is
      BELT_TEX_PERIOD metres, so offset advances BELT_SPEED / period per second. */

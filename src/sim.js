@@ -101,7 +101,7 @@ function solve(state) {
 
   const outLinks = new Map(ents.map((e) => [e.id, []]));
   const inLinks = new Map(ents.map((e) => [e.id, []]));
-  for (const l of links) { l.flow = 0; l.potFlow = 0; l.item = null; }
+  for (const l of links) { l.flow = 0; l.potFlow = 0; l.want = 0; l.item = null; }
   for (const l of links) {
     if (!byId.has(l.from) || !byId.has(l.to)) continue;
     outLinks.get(l.from).push(l);
@@ -172,7 +172,7 @@ function solve(state) {
     }
 
     for (const e of ents) avail.set(e.id, {});
-    for (const l of links) { l.flow = 0; l.item = null; }
+    for (const l of links) { l.flow = 0; l.want = 0; l.item = null; }
 
     for (const id of order) {
       const e = byId.get(id);
@@ -216,6 +216,14 @@ function solve(state) {
           return Math.max(0, Math.min(l.cap - (l.flow || 0), want - other));
         });
         const alloc = waterfill(amount, caps);
+        /* What the source wanted to push, regardless of what was accepted. A belt
+           whose destination cannot take delivery still has ore put onto it — it
+           backs up rather than staying empty — and the renderer needs both the
+           attempt and the outcome to show that. */
+        const share = amount / Math.max(1, outs.length);
+        outs.forEach((l) => {
+          if (l.item == null || l.item === item) { l.item = item; l.want = (l.want || 0) + share; }
+        });
         outs.forEach((l, k) => {
           if (alloc[k] <= EPS) return;
           l.flow = (l.flow || 0) + alloc[k];
@@ -306,6 +314,7 @@ function classify(e, def, outs) {
   if (def.kind === 'splitter' || def.kind === 'merger' || def.kind === 'sink') return 'passive';
   const r = recipeOf(e);
   if (!r) return 'idle';
+  if (def.kind === 'miner' && e.f <= EPS) return outs.length ? 'blocked' : 'idle';
   if (e.f <= EPS) return 'stopped';
   if (e.f > 0.9999) return 'running';
   for (const l of outs) if (l.saturated && l.overCapacity) return 'blocked';

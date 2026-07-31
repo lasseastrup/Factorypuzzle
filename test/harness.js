@@ -55,7 +55,7 @@ function El(tag) {
 }
 
 const ids = {};
-for (const id of ['tiltBtn','labels', 'docket', 'lvId', 'lvName', 'lvHint', 'quotas', 'levelBar',
+for (const id of ['labels', 'docket', 'lvId', 'lvName', 'lvHint', 'quotas', 'levelBar',
                   'insp', 'trayScroll', 'bar2', 'run', 'plannerBtn', 'clearBtn',
                   'report', 'rcard', 'toast', 'tools', 'tray', 'rotBtn', 'camBtn']) {
   ids[id] = El('div');
@@ -116,7 +116,7 @@ const body = blocks[blocks.length-1];
 const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet','LEVELS','MACHINES','groundAt','handleTap','portsOf','freeOutPort','commitStroke','beltMetres','computeCrossings','entAt','setTool','frame','score','updateLabels',
   'simplify','chaikin','resample','minRadius','segHit','routeBlocked','arcTable','MIN_RADIUS','canPlace',
   'sun','renderer','animateMachines','updateStatus','buildStatus','gMachines','BELT_TEX','BELT_SPEED',
-  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS','smoothPath','buildPath','smoothToRadius','MIN_RADIUS','SMOOTH_CAPS','ribbon','BELT_HW','RAIL_HW','BELT_TEX_PERIOD','gBelts','arcTable'];
+  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS','smoothPath','buildPath','smoothToRadius','MIN_RADIUS','SMOOTH_CAPS','ribbon','BELT_HW','RAIL_HW','BELT_TEX_PERIOD','gBelts','arcTable','updateJams','JAM_SPACING','itemMeshes','updateItems'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
@@ -587,8 +587,8 @@ setTimeout(() => {
 
   api.loadLevel(0);
   api.frame(performance.now());
-  ok(Math.abs(api.getPitch() - api.PITCH_STEPS[1]) < 1e-6,
-    `default tilt is ${Math.round(api.PITCH_STEPS[1] * 180 / Math.PI)} deg`);
+  ok(Math.abs(api.getPitch() - api.PITCH_STEPS[2]) < 1e-6,
+    `default tilt is ${Math.round(api.PITCH_STEPS[2] * 180 / Math.PI)} deg`);
 
   /* place a miner on the node and aim at the TOP of its drill tower */
   const lv = api.LEVELS[0];
@@ -638,7 +638,7 @@ setTimeout(() => {
         `${l.id}: terrain covers the frame at min tilt / max zoom (${terrainOnScreen.toFixed(0)} > ${viewH.toFixed(0)})`);
     }
   }
-  api.setPitch(api.PITCH_STEPS[1]);
+  api.setPitch(api.PITCH_STEPS[2]);
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 4400);
@@ -815,3 +815,81 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 5900);
+
+/* --- a belt that cannot deliver must fill up, not look empty ---
+   The miner puts ore on the belt the moment the belt exists. If the far end is not
+   connected the ore queues against it and stops. Rendering nothing there tells the
+   player the miner is idle, which is the opposite of the truth. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- belts back up ---');
+
+  api.loadLevel(0);
+  const lv = api.LEVELS[0];
+  const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const sm = api.addEntity('smelter', 8, 9, 0);
+  api.resolve();
+  const paint = (a, b) => {
+    const p0 = api.portsOf(a).out[Math.max(0, api.freeOutPort(a))];
+    const p1 = api.portsOf(b).in[0];
+    const pts = [];
+    for (let t = 0.1; t <= 1.0001; t += 0.1) pts.push({ x: p0.x + (p1.x - p0.x) * t, z: p0.z + (p1.z - p0.z) * t });
+    globalThis.__setStroke(a, Math.max(0, api.freeOutPort(a)));
+    api.commitStroke(pts, p1);
+  };
+  paint(m, sm);                      // miner -> smelter, and the smelter goes nowhere
+  api.computeCrossings(); api.resolve();
+
+  const link = api.links()[0];
+  ok(!!link, 'a belt was painted from the miner');
+  ok(link.item === 'ore', `the belt is tagged as carrying ore even though nothing can leave (item=${link.item})`);
+  ok((link.want || 0) > 29, `the miner is trying to push ${(link.want || 0).toFixed(0)}/min onto it`);
+  ok((link.flow || 0) < 1e-6, 'and none of it is getting through, because the smelter output is unconnected');
+  ok(m.state === 'blocked', `the miner reads as blocked rather than stopped (${m.state})`);
+
+  /* run and watch the queue build */
+  let t = performance.now();
+  const run = (secs) => { for (let i = 0; i < secs / 0.04; i++) { t += 40; api.frame(t); } };
+  ok((link.jamLen || 0) === 0, 'nothing queued before the first ore reaches the far end');
+  run(link.length / api.BELT_SPEED + 0.5);
+  const early = link.jamLen || 0;
+  run(20);
+  const later = link.jamLen || 0;
+  ok(later > early, `the queue grows over time (${early.toFixed(2)} m -> ${later.toFixed(2)} m)`);
+  ok(later <= link.length + 1e-6, 'and never exceeds the length of the belt');
+
+  /* the important bit: there are items rendered on it */
+  api.updateItems(api.getClock());
+  const oreCount = api.itemMeshes.ore.count;
+  ok(oreCount > 0, `ore is visible on the stalled belt (${oreCount} items)`);
+  ok(oreCount >= Math.floor(later / api.JAM_SPACING),
+    'at least as many items as the queue length implies');
+
+  /* connect the smelter onward and the queue must drain */
+  const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
+  paint(sm, depot);
+  api.computeCrossings(); api.resolve();
+  run(6);
+  ok((link.flow || 0) > 29, `ore flows once the line is complete (${(link.flow || 0).toFixed(0)}/min)`);
+  ok((link.jamLen || 0) < later, `the queue drains (${later.toFixed(2)} m -> ${(link.jamLen || 0).toFixed(2)} m)`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 6400);
+
+/* --- slower belts should mean more items visible --- */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- item density ---');
+  const S = api.BELT_SPEED;
+  for (const [flow, belt] of [[30, 9], [30, 14], [60, 9]]) {
+    const n = belt / (S * 60 / flow);
+    ok(n >= 1.5, `${flow}/min on a ${belt} m belt shows ${n.toFixed(1)} items at once`);
+  }
+  const gap = (S * 60 / 30) / S;
+  ok(Math.abs(gap - 2.0) < 1e-9, `and 30/min is still exactly one item every ${gap.toFixed(2)} s`);
+  console.log(`\n${p} passed, ${f} failed`);
+}, 6900);
