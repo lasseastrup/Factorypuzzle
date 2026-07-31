@@ -1597,7 +1597,32 @@ function showReport(met) {
    INPUT
    ============================================================ */
 const pointers = new Map();
-let dragMode = null, dragStart = null, pinchStart = 0, camStart = null, moved = 0;
+/* panStart and zoomStart are deliberately separate. They used to be one variable
+   holding either a Vector3 or a number depending on the gesture; a third finger
+   landing during a pinch assigned the Vector3 while the pinch was still active,
+   and Vector3 * number is NaN. That poisoned the zoom permanently and left the
+   camera frustum non-finite, so nothing rendered but the sky. */
+let dragMode = null, dragStart = null, pinchStart = 0, moved = 0;
+let panStart = new THREE.Vector3(), zoomStart = 0;
+
+let zoomMin = 8, zoomMax = 80;
+function setZoom(v) {
+  if (!Number.isFinite(v)) return;          /* never let NaN reach the camera */
+  zoom = Math.max(zoomMin, Math.min(zoomMax, v));
+  layoutCamera();
+}
+/* last-resort recovery: if the frustum is ever non-finite the view is dead and
+   cannot fix itself, so snap back to a sane framing */
+function cameraIsSane() {
+  return Number.isFinite(camera.left) && Number.isFinite(camera.right)
+    && Number.isFinite(camera.top) && Number.isFinite(camera.bottom)
+    && Number.isFinite(camCenter.x) && Number.isFinite(camCenter.z);
+}
+function resetView() {
+  zoom = L ? Math.max(L.w, L.h) * 1.5 : 24;
+  camCenter.set(L ? L.w / 2 : 8, 0, L ? L.h / 2 : 8);
+  layoutCamera();
+}
 
 function groundAt(cx, cy) {
   raycaster.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), camera);
@@ -1611,15 +1636,15 @@ cv.addEventListener('pointerdown', (ev) => {
   cv.setPointerCapture(ev.pointerId);
   pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
   moved = 0;
-  if (pointers.size === 2) {
+  if (pointers.size >= 2) {
     const p = [...pointers.values()];
-    pinchStart = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
-    dragMode = 'pinch'; camStart = zoom;
+    pinchStart = Math.max(1, Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y));
+    dragMode = 'pinch'; zoomStart = zoom;
     stroke = null; clear(gGhost);
     return;
   }
   dragStart = { x: ev.clientX, y: ev.clientY };
-  camStart = camCenter.clone();
+  panStart.copy(camCenter);
   const g = groundAt(ev.clientX, ev.clientY);
   if (tool === 'belt' && g) {
     /* begin a stroke at the nearest free output port */
@@ -1649,11 +1674,11 @@ cv.addEventListener('pointermove', (ev) => {
     return;
   }
   pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
-  if (dragMode === 'pinch' && pointers.size === 2) {
+  if (dragMode === 'pinch') {
+    if (pointers.size < 2) return;        /* wait for a second finger again */
     const p = [...pointers.values()];
-    const d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
-    zoom = Math.max(10, Math.min(72, camStart * (pinchStart / Math.max(1, d))));
-    layoutCamera();
+    const d = Math.max(1, Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y));
+    setZoom(zoomStart * (pinchStart / d));
     return;
   }
   const dx = ev.clientX - dragStart.x, dy = ev.clientY - dragStart.y;
@@ -1672,7 +1697,12 @@ cv.addEventListener('pointermove', (ev) => {
     const scale = zoom / innerHeight;
     const rx = -dx * scale, rz = -dy * scale / Math.cos(PITCH);
     const s = Math.sin(yaw), c = Math.cos(yaw);
-    camCenter.set(camStart.x + rx * c + rz * s, 0, camStart.z - rx * s + rz * c);
+    /* keep the plot within reach: panning into empty terrain is disorienting and
+       there is nothing out there to look at */
+    const m = 14;
+    camCenter.set(
+      Math.max(-m, Math.min((L ? L.w : 16) + m, panStart.x + rx * c + rz * s)), 0,
+      Math.max(-m, Math.min((L ? L.h : 16) + m, panStart.z - rx * s + rz * c)));
   }
 });
 
@@ -1689,13 +1719,20 @@ cv.addEventListener('pointerup', (ev) => {
   } else if (wasTap && g) {
     handleTap(g);
   }
+  if (pointers.size < 2 && dragMode === 'pinch') dragMode = null;
   if (!pointers.size) dragMode = null;
 });
-cv.addEventListener('pointercancel', (ev) => { pointers.delete(ev.pointerId); dragMode = null; stroke = null; clear(gGhost); });
+cv.addEventListener('pointercancel', (ev) => {
+  pointers.delete(ev.pointerId);
+  if (!pointers.size) dragMode = null;
+  stroke = null; clear(gGhost);
+});
+/* a finger that leaves the surface without a pointerup would otherwise linger in
+   the map forever and make every later single touch look like a pinch */
+addEventListener('blur', () => { pointers.clear(); dragMode = null; stroke = null; });
 cv.addEventListener('wheel', (ev) => {
   ev.preventDefault();
-  zoom = Math.max(10, Math.min(72, zoom * (1 + Math.sign(ev.deltaY) * 0.09)));
-  layoutCamera();
+  setZoom(zoom * (1 + Math.sign(ev.deltaY) * 0.09));
 }, { passive: false });
 
 function drawStrokePreview() {
@@ -1793,6 +1830,8 @@ function loadLevel(i) {
   addEntity('sink', L.depot.x, L.depot.z, 2);
   beltTier = L.belts[0];
   camCenter.set(L.w / 2, 0, L.h / 2);
+  zoomMin = 7;
+  zoomMax = Math.max(L.w, L.h) * 2.4;   /* stays within the terrain we actually built */
   zoom = Math.max(L.w, L.h) * 1.5;
   yaw = yawTarget = 0;
   layoutCamera();
@@ -1847,6 +1886,7 @@ function frame(now) {
   last = now;
   clock += dt;
   if (Math.abs(yawTarget - yaw) > 1e-4) yaw += (yawTarget - yaw) * Math.min(1, dt * 9);
+  if (!cameraIsSane()) { resetView(); toast('View reset.'); }
   placeCamera();
   if (phase === 'running') {
     runT += dt;

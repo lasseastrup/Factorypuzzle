@@ -17,7 +17,14 @@ function El(tag) {
     },
     appendChild(c) { this.children.push(c); return c; },
     removeChild(c) { this.children = this.children.filter((x) => x !== c); },
-    addEventListener() {}, removeEventListener() {},
+    /* listeners are recorded so tests can replay real gestures — input handling
+       has produced bugs that no amount of geometry checking would find */
+    _l: {},
+    addEventListener(t, fn) { (this._l[t] = this._l[t] || []).push(fn); },
+    removeEventListener(t, fn) { this._l[t] = (this._l[t] || []).filter((f) => f !== fn); },
+    fire(t, ev) {
+      for (const fn of (this._l[t] || [])) fn(Object.assign({ preventDefault() {} }, ev));
+    },
     setPointerCapture() {}, releasePointerCapture() {},
     querySelectorAll(sel) { return collect(sel); },
     getContext() {
@@ -106,11 +113,11 @@ const body = blocks[blocks.length-1];
 const exports_ = ['loadLevel','addEntity','resolve','startRun','scene','camera','LEVELS','MACHINES','groundAt','handleTap','portsOf','freeOutPort','commitStroke','beltMetres','computeCrossings','entAt','setTool','frame','validate','score','updateLabels',
   'simplify','chaikin','resample','minRadius','segHit','routeBlocked','arcTable','MIN_RADIUS','canPlace',
   'sun','renderer','animateMachines','updateRings','buildRings','gMachines','BELT_TEX',
-  'portsOf','localPorts','machineYaw','buildMachines'];
+  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
-  + ' getPhase: function(){return phase;}, getResult: function(){return result;},'
+  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
@@ -402,3 +409,64 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 2400);
+
+/* --- pinch/zoom gesture regression ---
+   Replays the gesture that killed the view: a third finger landing mid-pinch,
+   then lifting back to two. The old code assigned a Vector3 to the variable the
+   pinch maths multiplied, producing NaN zoom and a dead camera. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- pinch zoom ---');
+
+  api.loadLevel(0);
+  const cv = api.renderer.domElement;
+  const down = (id, x, y) => cv.fire('pointerdown', { pointerId: id, clientX: x, clientY: y });
+  const move = (id, x, y) => cv.fire('pointermove', { pointerId: id, clientX: x, clientY: y });
+  const up   = (id, x, y) => cv.fire('pointerup',   { pointerId: id, clientX: x, clientY: y });
+
+  const z0 = api.getZoom();
+
+  /* a normal two-finger pinch outward should zoom in */
+  down(1, 150, 400); down(2, 250, 400);
+  move(1, 100, 400); move(2, 300, 400);
+  const zIn = api.getZoom();
+  ok(Number.isFinite(zIn), 'zoom stays finite through a normal pinch');
+  ok(zIn < z0, `pinching out zooms in (${z0.toFixed(1)} -> ${zIn.toFixed(1)})`);
+  up(1, 100, 400); up(2, 300, 400);
+
+  /* now the killer: three fingers, then back to two.
+     Reset to mid-range first, or the clamp at zoomMin hides the result. */
+  api.setZoom(22);
+  down(1, 150, 400); down(2, 250, 400);
+  down(3, 200, 600);                       // third finger lands mid-pinch
+  up(3, 200, 600);                         // and lifts again
+  move(1, 120, 400); move(2, 280, 400);
+  const zAfter = api.getZoom();
+  ok(Number.isFinite(zAfter), `zoom survives a third finger (${zAfter.toFixed(1)})`);
+  ok(zAfter < 22, `and the pinch still had an effect (22.0 -> ${zAfter.toFixed(1)})`);
+  ok(api.cameraIsSane(), 'camera frustum still finite after the three-finger gesture');
+  up(1, 120, 400); up(2, 280, 400);
+  ok(api.getPointerCount() === 0, 'pointer map empties after all fingers lift');
+  ok(api.getDragMode() === null, 'drag mode clears');
+
+  /* and zooming back in must still work afterwards */
+  api.setZoom(22);
+  const zBefore = api.getZoom();
+  down(1, 150, 400); down(2, 250, 400);
+  move(1, 60, 400); move(2, 340, 400);
+  const zBack = api.getZoom();
+  up(1, 60, 400); up(2, 340, 400);
+  ok(zBack < zBefore, `can still zoom in afterwards (${zBefore.toFixed(1)} -> ${zBack.toFixed(1)})`);
+
+  /* direct assault on setZoom */
+  api.setZoom(NaN); ok(Number.isFinite(api.getZoom()), 'setZoom(NaN) is ignored');
+  api.setZoom(Infinity); ok(Number.isFinite(api.getZoom()), 'setZoom(Infinity) is ignored');
+  api.setZoom(-500); ok(api.getZoom() > 0, 'setZoom clamps below the minimum');
+  api.setZoom(1e9);
+  const lv = api.LEVELS[0];
+  ok(api.getZoom() <= Math.max(lv.w, lv.h) * 2.4 + 1e-6, 'setZoom clamps to the level maximum');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 2900);
