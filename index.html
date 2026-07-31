@@ -611,7 +611,9 @@ const STATE_COLOR = {
    together and moves them slower, which is what makes 30/min legible as a pulse
    every two seconds instead of a single object flashing past. */
 const BELT_SPEED = 2.8;        // m/s
-const BELT_HW = 0.15;          // half width
+const BELT_HW = 0.15;          // half width of the moving surface
+const RAIL_HW = 0.035;         // side rails are strips, not more belt
+const BELT_TEX_PERIOD = 0.38;  // metres per cleat
 const BELT_Y = 0.075;
 const MAX_ITEMS_PER_TYPE = 500;
 const CLEARANCE = 0.34;        // how close a belt may pass a machine or rock
@@ -1492,20 +1494,34 @@ const updateRings = updateStatus;
    scrolls at the same rate and one shared material can drive them all — the item
    spacing is what conveys the actual rate. UVs run along arc length so the
    pattern does not stretch on curves. */
+/* u runs ALONG the belt and v ACROSS it, so canvas x is length and canvas y is
+   width. The pattern therefore has to span the full canvas height or only a strip
+   of the belt appears to move — which is exactly what went wrong before: the
+   chevron covered v 0.09..0.47 and read as a thin line snaking down the middle. */
 function beltTexture() {
+  const N = 64;
   const c = document.createElement('canvas');
-  c.width = 64; c.height = 64;
+  c.width = N; c.height = N;
   const g = c.getContext('2d');
   g.fillStyle = '#ffffff';
-  g.fillRect(0, 0, 64, 64);
-  g.strokeStyle = 'rgba(0,0,0,0.30)';
+  g.fillRect(0, 0, N, N);
+
+  /* a transverse cleat, edge to edge: the clearest possible motion cue */
+  g.fillStyle = 'rgba(0,0,0,0.34)';
+  g.fillRect(0, 0, 10, N);
+
+  /* and a chevron pointing the way the belt travels, also edge to edge */
+  g.strokeStyle = 'rgba(0,0,0,0.22)';
   g.lineWidth = 9;
   g.beginPath();
-  g.moveTo(4, 6); g.lineTo(32, 30); g.lineTo(60, 6);
+  g.moveTo(24, 0); g.lineTo(50, N / 2); g.lineTo(24, N);
   g.stroke();
-  g.strokeStyle = 'rgba(0,0,0,0.13)';
-  g.lineWidth = 5;
-  g.beginPath(); g.moveTo(0, 62); g.lineTo(64, 62); g.stroke();
+
+  /* static darkening at both edges so the belt reads as having sides */
+  g.fillStyle = 'rgba(0,0,0,0.26)';
+  g.fillRect(0, 0, N, 4);
+  g.fillRect(0, N - 4, N, 4);
+
   const t = new THREE.CanvasTexture(c);
   t.wrapS = THREE.RepeatWrapping;
   t.wrapT = THREE.ClampToEdgeWrapping;
@@ -1518,7 +1534,7 @@ const BELT_TEX = beltTexture();
 const newBeltMat = () => new THREE.MeshLambertMaterial({
   vertexColors: true, map: BELT_TEX, side: THREE.DoubleSide });
 
-function ribbon(list, colorFor, withUV) {
+function ribbon(list, colorFor, withUV, halfWidth) {
   const pos = [], col = [], idx = [], nrm = [], uv = [];
   let base = 0;
   const c = new THREE.Color();
@@ -1534,11 +1550,12 @@ function ribbon(list, colorFor, withUV) {
       const tl = Math.hypot(tx, tz) || 1;
       tx /= tl; tz /= tl;
       const y = yAt(l, arc[i]);
-      pos.push(p.x - tz * BELT_HW, y, p.z + tx * BELT_HW);
-      pos.push(p.x + tz * BELT_HW, y, p.z - tx * BELT_HW);
+      const hw = halfWidth == null ? BELT_HW : halfWidth;
+      pos.push(p.x - tz * hw, y, p.z + tx * hw);
+      pos.push(p.x + tz * hw, y, p.z - tx * hw);
       nrm.push(0, 1, 0, 0, 1, 0);
       col.push(c.r, c.g, c.b, c.r, c.g, c.b);
-      uv.push(arc[i] / 0.45, 0, arc[i] / 0.45, 1);
+      uv.push(arc[i] / BELT_TEX_PERIOD, 0, arc[i] / BELT_TEX_PERIOD, 1);
     }
     for (let i = 0; i < pts.length - 1; i++) {
       const a = base + i * 2;
@@ -1594,7 +1611,9 @@ function buildBelts() {
     }
     for (let s = 0.45; s < l.length; s += 1.5) legs.push({ l, s });
   }
-  const railG = ribbon(railGeo, (l, c) => c.setHex(0x5c6167), false);
+  /* thin strips, not more full-width belt: they used to inherit BELT_HW, which
+     tripled the apparent width of every conveyor with untextured grey */
+  const railG = ribbon(railGeo, (l, c) => c.setHex(0x545a60), false, RAIL_HW);
   if (railG) {
     /* lift the rails just above the belt surface */
     const p = railG.attributes.position;
@@ -2396,7 +2415,10 @@ function frame(now) {
   }
 
   updateStatus();
-  BELT_TEX.offset.x = -(clockT * BELT_SPEED) / 0.6;
+  /* The surface must scroll at exactly the speed items travel, or the belt looks
+     like it is slipping under its own cargo. One period of texture is
+     BELT_TEX_PERIOD metres, so offset advances BELT_SPEED / period per second. */
+  BELT_TEX.offset.x = -(clockT * BELT_SPEED) / BELT_TEX_PERIOD;
   animateMachines(clockT);
   updateItems(clockT);
   updateLabels();

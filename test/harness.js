@@ -33,9 +33,12 @@ function El(tag) {
       return {
         scale() {}, translate() {}, rotate() {}, save() {}, restore() {},
         fillText() {}, measureText: () => ({ width: 10 }),
-        clearRect() {}, fillRect() {}, strokeRect() {},
-        beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, arc() {},
-        stroke() {}, fill() {},
+        clearRect() {}, fillRect(x, y, w, hh) { this._ops.push(['rect', x, y, w, hh]); }, strokeRect() {},
+        _ops: (globalThis.__canvasOps = globalThis.__canvasOps || []),
+        beginPath() {}, closePath() {},
+        moveTo(x, y) { this._ops.push(['pt', x, y]); },
+        lineTo(x, y) { this._ops.push(['pt', x, y]); },
+        arc() {}, stroke() {}, fill() {},
         createLinearGradient: () => ({ addColorStop() {} }),
         createRadialGradient: () => ({ addColorStop() {} }),
         set font(v) {}, set fillStyle(v) {}, set strokeStyle(v) {},
@@ -113,7 +116,7 @@ const body = blocks[blocks.length-1];
 const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet','LEVELS','MACHINES','groundAt','handleTap','portsOf','freeOutPort','commitStroke','beltMetres','computeCrossings','entAt','setTool','frame','score','updateLabels',
   'simplify','chaikin','resample','minRadius','segHit','routeBlocked','arcTable','MIN_RADIUS','canPlace',
   'sun','renderer','animateMachines','updateStatus','buildStatus','gMachines','BELT_TEX','BELT_SPEED',
-  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS','smoothPath','buildPath','smoothToRadius','MIN_RADIUS','SMOOTH_CAPS'];
+  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS','smoothPath','buildPath','smoothToRadius','MIN_RADIUS','SMOOTH_CAPS','ribbon','BELT_HW','RAIL_HW','BELT_TEX_PERIOD','gBelts','arcTable'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
@@ -749,3 +752,66 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 5400);
+
+/* --- the belt must look like a belt ---
+   Two failures were visible only on a real screen: the side rails were built at
+   the belt's own half-width, so most of the visible conveyor was untextured grey,
+   and the chevron spanned only the middle of the width so just a thin line
+   appeared to move. */
+setTimeout(() => {
+  const THREE = require('three');
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- belt appearance ---');
+
+  /* rails must be strips, not more belt */
+  ok(api.RAIL_HW < api.BELT_HW * 0.4,
+    `side rails are thin relative to the surface (${(api.RAIL_HW * 2).toFixed(2)} m vs ${(api.BELT_HW * 2).toFixed(2)} m)`);
+  const totalWidth = api.BELT_HW * 2 + 4 * api.RAIL_HW;
+  ok(totalWidth < api.BELT_HW * 2 * 1.6,
+    `total conveyor width stays close to the moving surface (${totalWidth.toFixed(2)} m)`);
+
+  /* ribbon() must honour the width it is given */
+  const straight = { path: [{ x: 0, z: 0 }, { x: 4, z: 0 }], arc: [0, 4], bumps: [], tier: 1 };
+  const spread = (hw) => {
+    const g = api.ribbon([straight], (l, c) => c.setHex(0xffffff), false, hw);
+    const a = g.attributes.position;
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < a.count; i++) { min = Math.min(min, a.getZ(i)); max = Math.max(max, a.getZ(i)); }
+    return max - min;
+  };
+  ok(Math.abs(spread(api.BELT_HW) - api.BELT_HW * 2) < 1e-6, 'ribbon at belt width spans the belt width');
+  ok(Math.abs(spread(api.RAIL_HW) - api.RAIL_HW * 2) < 1e-6, 'ribbon at rail width spans only the rail width');
+
+  /* the surface UVs must cover the full width, or only a strip animates */
+  api.loadLevel(0);
+  const surf = api.ribbon([straight], (l, c) => c.setHex(0xffffff), true, api.BELT_HW);
+  const uv = surf.attributes.uv;
+  let vmin = Infinity, vmax = -Infinity;
+  for (let i = 0; i < uv.count; i++) { vmin = Math.min(vmin, uv.getY(i)); vmax = Math.max(vmax, uv.getY(i)); }
+  ok(vmin === 0 && vmax === 1, `surface UVs span the full width (v ${vmin}..${vmax})`);
+
+  /* and the drawn pattern must reach both edges of that width */
+  const ops = globalThis.__canvasOps || [];
+  const N = 64;
+  let touchesTop = false, touchesBottom = false, fullSpanRect = false;
+  for (const o of ops) {
+    if (o[0] === 'pt') {
+      if (o[2] <= 1) touchesTop = true;
+      if (o[2] >= N - 1) touchesBottom = true;
+    } else if (o[0] === 'rect' && o[2] <= 0 && o[4] >= N) {
+      fullSpanRect = true;      // a cleat spanning edge to edge
+    }
+  }
+  ok(touchesTop && touchesBottom, 'the chevron reaches both edges of the belt');
+  ok(fullSpanRect, 'there is a cleat spanning the full width');
+
+  /* surface scroll must match item speed or the belt slips under its cargo */
+  const scrollPerSec = api.BELT_SPEED / api.BELT_TEX_PERIOD;      // texture periods/sec
+  const metresPerSec = scrollPerSec * api.BELT_TEX_PERIOD;
+  ok(Math.abs(metresPerSec - api.BELT_SPEED) < 1e-9,
+    `surface scrolls at item speed (${metresPerSec.toFixed(2)} m/s)`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 5900);
