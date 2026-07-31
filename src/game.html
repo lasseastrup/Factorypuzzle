@@ -1,0 +1,1457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>RATIO — prototype</title>
+<style>
+  :root{
+    --ink:#161d21; --ink-2:#2b363d; --panel:#eceae1; --panel-2:#dcd9cc;
+    --line:#b6b2a3; --accent:#2f6f8f;
+    --run:#2f9e6f; --starve:#d99a20; --throttle:#c9702c; --block:#c2402f; --stop:#8b8f8a;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;overflow:hidden;background:#a8ada1;font-family:var(--ui);color:var(--ink)}
+  canvas{display:block;touch-action:none}
+
+  #docket{position:fixed;top:0;left:0;right:0;padding:8px 10px;
+    background:linear-gradient(#161d21,#1d262b);color:#e8e6dd;
+    display:flex;gap:10px;align-items:stretch;z-index:10}
+  #docket .id{font-family:var(--mono);font-size:10px;color:#7f8b84;writing-mode:vertical-rl;
+    transform:rotate(180deg);letter-spacing:.2em;padding:2px 6px 2px 0;border-right:1px solid #333e44}
+  #dockBody{flex:1;min-width:0}
+  #lvName{font:600 13px/1.2 var(--ui)}
+  #lvHint{font-size:10.5px;color:#95a09a;margin-top:2px;line-height:1.3}
+  #quotas{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+  .q{display:flex;align-items:center;gap:5px;background:#232d33;border:1px solid #334047;
+     border-radius:2px;padding:3px 6px;font-family:var(--mono);font-size:11px}
+  .q .sw{width:8px;height:8px;border-radius:1px}
+  .q .got{color:#7f8b84}
+  .q.met{border-color:#2f9e6f;background:#1b2f28}
+  .q.met .got{color:#5fd0a8}
+
+  #tools{position:fixed;right:8px;top:50%;transform:translateY(-50%);z-index:10;
+    display:flex;flex-direction:column;gap:5px}
+  .tbtn{width:44px;height:44px;border:1px solid var(--line);background:var(--panel);
+    border-radius:3px;display:grid;place-items:center;font:600 8.5px/1.15 var(--ui);
+    letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);cursor:pointer;padding:3px;text-align:center}
+  .tbtn.on{background:var(--ink);color:#f0eee5;border-color:var(--ink)}
+
+  #tray{position:fixed;bottom:0;left:0;right:0;z-index:10;background:var(--panel);
+    border-top:1px solid var(--line)}
+  #trayScroll{display:flex;gap:6px;overflow-x:auto;padding:7px 8px;scrollbar-width:none}
+  #trayScroll::-webkit-scrollbar{display:none}
+  .card{flex:0 0 auto;width:82px;border:1px solid var(--line);border-radius:3px;
+    background:#f6f4ed;padding:5px 6px;cursor:pointer;text-align:left}
+  .card.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+  .card .cn{font:600 10.5px/1.2 var(--ui)}
+  .card .cr{font-family:var(--mono);font-size:9px;color:#6d7570;margin-top:3px;line-height:1.35}
+  .card .bar{height:3px;border-radius:2px;margin-bottom:4px}
+  #bar2{display:flex;gap:6px;padding:0 8px 7px;align-items:center}
+  #run{flex:1;height:38px;border:0;border-radius:3px;background:var(--ink);color:#f0eee5;
+    font:600 12px/1 var(--ui);letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
+  #run.live{background:var(--block)}
+  .mini{height:38px;padding:0 10px;border:1px solid var(--line);background:#f6f4ed;
+    border-radius:3px;font:600 10px/1 var(--ui);letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
+  .mini.on{background:var(--ink);color:#f0eee5;border-color:var(--ink)}
+
+  #insp{position:fixed;left:8px;bottom:104px;z-index:11;width:214px;background:var(--panel);
+    border:1px solid var(--line);border-radius:3px;padding:8px 9px;display:none}
+  #insp h4{margin:0 0 5px;font:600 11.5px/1.2 var(--ui)}
+  #insp .row{display:flex;justify-content:space-between;font-family:var(--mono);
+    font-size:10px;padding:2px 0;border-bottom:1px dotted #c9c5b6}
+  #insp .row:last-of-type{border:0}
+  #insp .why{margin-top:6px;font-size:10px;line-height:1.4;color:#4a534d;
+    border-left:2px solid var(--throttle);padding-left:6px}
+  #insp .acts{display:flex;gap:4px;margin-top:7px;flex-wrap:wrap}
+  #insp button{flex:1;min-width:56px;padding:5px 4px;border:1px solid var(--line);background:#f6f4ed;
+    border-radius:2px;font:600 9px/1 var(--ui);letter-spacing:.05em;text-transform:uppercase;cursor:pointer}
+
+  #report{position:fixed;inset:0;z-index:30;background:rgba(20,26,30,.82);display:none;
+    align-items:center;justify-content:center;padding:18px}
+  #rcard{background:var(--panel);border-radius:4px;padding:16px;width:100%;max-width:330px}
+  #rcard h3{margin:0;font:600 15px/1.2 var(--ui)}
+  #rcard .sub{font-size:10.5px;color:#6d7570;margin:3px 0 12px;line-height:1.4}
+  .metric{margin-bottom:9px}
+  .metric .top{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px}
+  .metric .track{height:5px;background:var(--panel-2);border-radius:3px;margin-top:3px;position:relative}
+  .metric .fill{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:3px}
+  .metric .par{position:absolute;top:-2px;bottom:-2px;width:1px;background:var(--ink)}
+  .metric .cap{font-size:9px;color:#6d7570;margin-top:2px}
+  #rcard .acts{display:flex;gap:6px;margin-top:12px}
+  #rcard button{flex:1;padding:10px;border:0;border-radius:3px;background:var(--ink);color:#f0eee5;
+    font:600 11px/1 var(--ui);letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
+  #rcard button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+
+  #labels{position:fixed;inset:0;pointer-events:none;z-index:5;display:none}
+  #labels.on{display:block}
+  .tag{position:absolute;transform:translate(-50%,-50%);font-family:var(--mono);font-size:9.5px;
+    line-height:1.25;white-space:nowrap;padding:1px 4px;border-radius:2px;
+    background:rgba(255,255,255,.9);border:1px solid rgba(0,0,0,.16);color:#1d2529}
+  .tag.bad{background:#fdecea;border-color:var(--block);color:#7d2318}
+  .tag.warn{background:#fdf3e2;border-color:var(--throttle);color:#7a4413}
+  .tag.ok{background:#e9f6ef;border-color:var(--run);color:#1b5b41}
+
+  #toast{position:fixed;left:50%;bottom:112px;transform:translateX(-50%);z-index:20;
+    background:var(--ink);color:#f0eee5;padding:7px 12px;border-radius:3px;font-size:11px;
+    opacity:0;transition:opacity .18s;pointer-events:none;max-width:78vw;text-align:center}
+  #toast.on{opacity:1}
+
+  #levelBar{position:fixed;left:8px;z-index:10;display:flex;gap:4px}
+  .lv{width:26px;height:26px;border:1px solid var(--line);background:var(--panel);border-radius:2px;
+    font-family:var(--mono);font-size:10px;cursor:pointer;display:grid;place-items:center;padding:0}
+  .lv.on{background:var(--ink);color:#f0eee5;border-color:var(--ink)}
+  .lv.done{border-color:var(--run);color:var(--run)}
+  .lv.done.on{color:#5fd0a8}
+
+  #ruler{position:fixed;left:8px;bottom:78px;z-index:10;font-family:var(--mono);font-size:9px;
+    color:#3b443e;background:rgba(236,234,225,.85);border:1px solid var(--line);border-radius:2px;
+    padding:3px 6px;display:none}
+  #ruler.on{display:block}
+
+  #fatal{display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:99;
+    max-width:300px;background:#fdecea;border:1px solid var(--block);border-left-width:3px;
+    border-radius:3px;padding:11px 13px;font-size:12px;line-height:1.45;color:#7d2318}
+  #fatal b{display:block;margin-bottom:4px}
+  #fatal span{display:block;font-family:var(--mono);font-size:10px;opacity:.75;margin-top:5px;word-break:break-all}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="labels"></div>
+<div id="docket">
+  <div class="id" id="lvId">LV 01</div>
+  <div id="dockBody">
+    <div id="lvName">—</div>
+    <div id="lvHint">—</div>
+    <div id="quotas"></div>
+  </div>
+</div>
+<div id="levelBar"></div>
+<div id="tools">
+  <button class="tbtn on" data-tool="select">Select</button>
+  <button class="tbtn" data-tool="belt">Paint belt</button>
+  <button class="tbtn" data-tool="erase">Erase</button>
+  <button class="tbtn" id="rotBtn">Turn 90&deg;</button>
+  <button class="tbtn" id="camBtn">Rotate view</button>
+</div>
+<div id="ruler"></div>
+<div id="insp"></div>
+<div id="tray">
+  <div id="trayScroll"></div>
+  <div id="bar2">
+    <button id="run">Run factory</button>
+    <button class="mini" id="plannerBtn">Planner</button>
+    <button class="mini" id="clearBtn">Clear</button>
+  </div>
+</div>
+<div id="report"><div id="rcard"></div></div>
+<div id="toast"></div>
+
+<script>
+window.__fatal = function (msg, detail) {
+  var el = document.getElementById('fatal');
+  if (!el) { el = document.createElement('div'); el.id = 'fatal'; document.body.appendChild(el); }
+  el.innerHTML = '<b>' + msg + '</b>' + (detail ? '<span>' + detail + '</span>' : '');
+  el.style.display = 'block';
+};
+window.addEventListener('error', function (e) {
+  window.__fatal(e.message || 'Script error', (e.filename || '') + (e.lineno ? ':' + e.lineno : ''));
+});
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+if (typeof THREE === 'undefined') {
+  window.__fatal('three.js did not load.',
+    'The prototype needs three.js from cdnjs. Check the connection and reload.');
+  throw new Error('three.js missing');
+}
+
+/*__SIM__*/
+
+/* ============================================================
+   LEVELS. Positions are metres now, not tiles. Machine footprints
+   are metres too, so "1 tile" from the old build reads as "1 m".
+   ============================================================ */
+const LEVELS = [
+  { id: 'Ingots', name: 'First ingots', rung: 1,
+    hint: 'Paint a belt: press on a machine and drag to the next one. Curves are fine.',
+    w: 15, h: 14,
+    nodes: [{ x: 3.5, z: 4, rate: 30 }],
+    depot: { x: 11.5, z: 10 },
+    rocks: [{ x: 7.4, z: 2.6, r: 0.7 }, { x: 8.1, z: 4.2, r: 0.55 }],
+    quota: { ingot: 30 },
+    tech: ['miner', 'smelter'], belts: [1],
+    par: { machines: 2, belt: 10, ore: 30 } },
+
+  { id: 'Plates', name: 'Plate line', rung: 2,
+    hint: 'A Constructor turns 30 ingots into 20 plates. Watch the efficiency ring.',
+    w: 17, h: 14,
+    nodes: [{ x: 3, z: 3.5, rate: 30 }],
+    depot: { x: 13.5, z: 10.5 },
+    rocks: [{ x: 8, z: 6.5, r: 0.8 }, { x: 9.3, z: 7.4, r: 0.6 }, { x: 6.4, z: 10.8, r: 0.65 }],
+    quota: { plate: 20 },
+    tech: ['miner', 'smelter', 'constructor'], belts: [1],
+    par: { machines: 3, belt: 14, ore: 30 } },
+
+  { id: 'Screws', name: 'Ninety screws', rung: 2,
+    hint: 'A Constructor makes 90 screws a minute. A Mk1 belt carries 60. Find the bottleneck.',
+    w: 17, h: 16,
+    nodes: [{ x: 3, z: 4.5, rate: 30 }],
+    depot: { x: 13.5, z: 11.5 },
+    rocks: [{ x: 8.6, z: 2.8, r: 0.75 }, { x: 8.9, z: 4.3, r: 0.6 }, { x: 6.8, z: 13.4, r: 0.7 }],
+    quota: { screw: 90 },
+    tech: ['miner', 'smelter', 'constructor'], belts: [1, 2],
+    par: { machines: 4, belt: 17, ore: 30 } },
+
+  { id: 'Reinf', name: 'Reinforced plate', rung: 2,
+    hint: 'Plates and screws into one Assembler. Two nodes, and Mk2 belts are unlocked.',
+    w: 21, h: 18,
+    nodes: [{ x: 3, z: 3.5, rate: 30 }, { x: 3, z: 13.5, rate: 30 }],
+    depot: { x: 17.5, z: 9 },
+    rocks: [{ x: 10, z: 1.2, r: 0.8 }, { x: 10, z: 16.6, r: 0.8 },
+            { x: 13.6, z: 5.4, r: 0.7 }, { x: 13.6, z: 12.6, r: 0.7 }],
+    quota: { reinf: 10 },
+    tech: ['miner', 'smelter', 'constructor', 'assembler', 'splitter', 'merger'], belts: [1, 2],
+    par: { machines: 8, belt: 46, ore: 60 } },
+
+  { id: 'Twin', name: 'Two products, one node', rung: 4,
+    hint: 'A pure node gives 60 ore. Both outputs draw on it — the split is the puzzle.',
+    w: 19, h: 16,
+    nodes: [{ x: 3, z: 8, rate: 60 }],
+    depot: { x: 15.5, z: 8 },
+    rocks: [{ x: 9, z: 3.4, r: 0.8 }, { x: 9, z: 12.6, r: 0.8 }, { x: 12, z: 8, r: 0.65 }],
+    quota: { plate: 20, rod: 30 },
+    tech: ['miner', 'smelter', 'constructor', 'splitter', 'merger'], belts: [1, 2],
+    par: { machines: 5, belt: 34, ore: 60 } },
+];
+
+const MACHINE_COLOR = {
+  miner: 0x474d52, smelter: 0x9c4b36, constructor: 0x3d6a89,
+  assembler: 0xa2833c, splitter: 0x5c6660, merger: 0x5c6660, sink: 0x2e5a48,
+};
+const STATE_COLOR = {
+  running: 0x2f9e6f, starved: 0xd99a20, throttled: 0xc9702c,
+  blocked: 0xc2402f, stopped: 0x8b8f8a, idle: 0x8b8f8a, passive: 0x8b8f8a,
+};
+
+const BELT_SPEED = 4.2;        // m/s, tuned for spin-up budget (§5.1)
+const BELT_HW = 0.30;          // half width
+const BELT_Y = 0.075;
+const MAX_ITEMS_PER_TYPE = 500;
+const CLEARANCE = 0.34;        // how close a belt may pass a machine or rock
+const STROKE_MIN_STEP = 0.16;  // sampling distance while painting
+const SIMPLIFY_EPS = 0.13;
+const RESAMPLE = 0.34;
+const MIN_RADIUS = 0.85;       // conveyors cannot turn on a dime
+const SNAP_RADIUS = 2.2;       // how near a port a stroke must start or end
+const BUMP_H = 0.46, BUMP_SIG = 0.62;  // over-under at a crossing
+const ENDPOINT_GUARD = 0.55;   // convergence near a shared port is not a crossing
+
+/* ============================================================
+   STATE
+   ============================================================ */
+let L = null, lvIndex = 0;
+const solved = {};
+let ents = [], links = [], nextId = 1;
+let tool = 'select', pickedType = null, pickedRecipe = null, pickedRot = 0, beltTier = 1;
+let selected = null, result = null, phase = 'edit', runT = 0, spinUp = 0, plannerOn = false;
+let stroke = null;   // { fromEnt, fromPort, pts[] }
+
+/* ============================================================
+   GEOMETRY
+   ============================================================ */
+const DIRS = [[0, 1], [1, 0], [0, -1], [-1, 0]];
+
+/* axis-aligned box, because rotation is in 90° steps even though position is free */
+function boxOf(e, inflate) {
+  const d = MACHINES[e.type];
+  const ex = (e.rot % 2 ? d.h : d.w) / 2 + (inflate || 0);
+  const ez = (e.rot % 2 ? d.w : d.h) / 2 + (inflate || 0);
+  return { x0: e.x - ex, x1: e.x + ex, z0: e.z - ez, z1: e.z + ez, ex, ez };
+}
+const boxesOverlap = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
+const inBox = (p, b) => p.x >= b.x0 && p.x <= b.x1 && p.z >= b.z0 && p.z <= b.z1;
+
+function inPlot(e) {
+  const b = boxOf(e);
+  return b.x0 >= 0.1 && b.z0 >= 0.1 && b.x1 <= L.w - 0.1 && b.z1 <= L.h - 0.1;
+}
+
+/* Ports. A machine's output leaves the face it is turned toward; inputs enter
+   the opposite face, one per required item, so a port means something. */
+function portsOf(e) {
+  const d = MACHINES[e.type];
+  const dir = DIRS[e.rot % 4];
+  const perp = [dir[1], -dir[0]];
+  const halfDepth = d.h / 2, halfCross = d.w / 2;
+  const at = (fwd, side) => ({
+    x: e.x + dir[0] * fwd + perp[0] * side,
+    z: e.z + dir[1] * fwd + perp[1] * side,
+  });
+  if (d.kind === 'splitter') {
+    return { out: [at(halfDepth, 0), at(0, halfCross), at(0, -halfCross)], in: [at(-halfDepth, 0)], inItems: [null] };
+  }
+  if (d.kind === 'merger') {
+    return { out: [at(halfDepth, 0)], in: [at(-halfDepth, 0), at(0, halfCross), at(0, -halfCross)], inItems: [null, null, null] };
+  }
+  if (d.kind === 'sink') {
+    return { out: [], in: [at(halfDepth, 0), at(-halfDepth, 0), at(0, halfCross), at(0, -halfCross)], inItems: [null, null, null, null] };
+  }
+  const r = recipeOf(e);
+  const items = r ? Object.keys(r.in) : [];
+  const ins = items.map((_, i) => {
+    const spread = items.length > 1 ? (i / (items.length - 1) - 0.5) * (halfCross * 1.25) : 0;
+    return at(-halfDepth, spread);
+  });
+  return { out: [at(halfDepth, 0)], in: ins, inItems: items };
+}
+
+const dist2 = (a, b) => (a.x - b.x) ** 2 + (a.z - b.z) ** 2;
+
+/* distance from a point to a segment, for hit-testing painted belts */
+function distToSeg(p, a, b) {
+  const vx = b.x - a.x, vz = b.z - a.z;
+  const wx = p.x - a.x, wz = p.z - a.z;
+  const L2 = vx * vx + vz * vz;
+  let t = L2 ? (wx * vx + wz * vz) / L2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + vx * t), p.z - (a.z + vz * t));
+}
+function distToPath(p, pts) {
+  let m = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) m = Math.min(m, distToSeg(p, pts[i], pts[i + 1]));
+  return m;
+}
+
+/* Ramer–Douglas–Peucker */
+function simplify(pts, eps) {
+  if (pts.length < 3) return pts.slice();
+  const keep = new Array(pts.length).fill(false);
+  keep[0] = keep[pts.length - 1] = true;
+  (function rec(a, b) {
+    let worst = -1, wi = -1;
+    for (let i = a + 1; i < b; i++) {
+      const d = distToSeg(pts[i], pts[a], pts[b]);
+      if (d > worst) { worst = d; wi = i; }
+    }
+    if (worst > eps && wi > 0) { keep[wi] = true; rec(a, wi); rec(wi, b); }
+  })(0, pts.length - 1);
+  return pts.filter((_, i) => keep[i]);
+}
+
+/* Chaikin corner cutting, endpoints pinned */
+function chaikin(pts, iters) {
+  let p = pts;
+  for (let k = 0; k < iters; k++) {
+    if (p.length < 3) break;
+    const out = [p[0]];
+    for (let i = 0; i < p.length - 1; i++) {
+      const a = p[i], b = p[i + 1];
+      out.push({ x: a.x * 0.75 + b.x * 0.25, z: a.z * 0.75 + b.z * 0.25 });
+      out.push({ x: a.x * 0.25 + b.x * 0.75, z: a.z * 0.25 + b.z * 0.75 });
+    }
+    out.push(p[p.length - 1]);
+    p = out;
+  }
+  return p;
+}
+
+function resample(pts, step) {
+  if (pts.length < 2) return pts.slice();
+  const out = [pts[0]];
+  let carry = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    let seg = Math.hypot(b.x - a.x, b.z - a.z);
+    if (seg < 1e-6) continue;
+    let t = (step - carry) / seg;
+    while (t <= 1) {
+      out.push({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t });
+      t += step / seg;
+    }
+    carry = (carry + seg) % step;
+  }
+  const last = pts[pts.length - 1];
+  if (dist2(out[out.length - 1], last) > 1e-4) out.push(last);
+  return out;
+}
+
+function minRadius(pts) {
+  let m = Infinity;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = pts[i - 1], b = pts[i], c = pts[i + 1];
+    const ab = Math.hypot(b.x - a.x, b.z - a.z);
+    const bc = Math.hypot(c.x - b.x, c.z - b.z);
+    const ac = Math.hypot(c.x - a.x, c.z - a.z);
+    const area = Math.abs((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)) / 2;
+    if (area < 1e-7) continue;
+    m = Math.min(m, (ab * bc * ac) / (4 * area));
+  }
+  return m;
+}
+
+function arcTable(pts) {
+  const arc = [0];
+  for (let i = 1; i < pts.length; i++) arc.push(arc[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z));
+  return arc;
+}
+
+/* ============================================================
+   THREE SETUP
+   ============================================================ */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xa8ada1);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+const PITCH = 58 * Math.PI / 180;
+let yaw = 0, yawTarget = 0, zoom = 34, camCenter = new THREE.Vector3(7, 0, 7);
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
+
+function layoutCamera() {
+  renderer.setSize(innerWidth, innerHeight);
+  const aspect = innerWidth / innerHeight;
+  camera.left = -zoom * aspect / 2; camera.right = zoom * aspect / 2;
+  camera.top = zoom / 2; camera.bottom = -zoom / 2;
+  camera.updateProjectionMatrix();
+}
+function placeCamera() {
+  const d = 100;
+  camera.position.set(
+    camCenter.x + Math.sin(yaw) * Math.cos(PITCH) * d,
+    Math.sin(PITCH) * d,
+    camCenter.z + Math.cos(yaw) * Math.cos(PITCH) * d
+  );
+  camera.up.set(0, 1, 0);
+  camera.lookAt(camCenter);
+}
+
+scene.add(new THREE.HemisphereLight(0xf3f1e6, 0x8d9287, 0.95));
+const sun = new THREE.DirectionalLight(0xfff6e2, 0.75);
+sun.position.set(-18, 30, 14);
+scene.add(sun);
+
+const world = new THREE.Group();
+scene.add(world);
+const gPad = new THREE.Group(), gMachines = new THREE.Group(), gBelts = new THREE.Group(),
+      gRings = new THREE.Group(), gItems = new THREE.Group(), gGhost = new THREE.Group();
+world.add(gPad, gBelts, gMachines, gRings, gItems, gGhost);
+
+const raycaster = new THREE.Raycaster();
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
+function clear(g) {
+  while (g.children.length) {
+    const c = g.children.pop();
+    if (c.geometry) c.geometry.dispose();
+    if (c.material) (Array.isArray(c.material) ? c.material : [c.material]).forEach((m) => m.dispose());
+  }
+}
+
+/* ============================================================
+   PLOT — no grid. The edge is a ruler instead, because the
+   currency is metres of belt.
+   ============================================================ */
+function buildPad() {
+  clear(gPad);
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(L.w, 0.4, L.h),
+    new THREE.MeshLambertMaterial({ color: 0xd6d8cd }));
+  pad.position.set(L.w / 2, -0.2, L.h / 2);
+  gPad.add(pad);
+
+  const ticks = [];
+  for (let x = 0; x <= L.w; x++) { const t = x % 5 === 0 ? 0.62 : 0.26; ticks.push(x, 0.006, 0, x, 0.006, t, x, 0.006, L.h, x, 0.006, L.h - t); }
+  for (let z = 0; z <= L.h; z++) { const t = z % 5 === 0 ? 0.62 : 0.26; ticks.push(0, 0.006, z, t, 0.006, z, L.w, 0.006, z, L.w - t, 0.006, z); }
+  const tg = new THREE.BufferGeometry();
+  tg.setAttribute('position', new THREE.Float32BufferAttribute(ticks, 3));
+  gPad.add(new THREE.LineSegments(tg, new THREE.LineBasicMaterial({ color: 0x8f938a })));
+
+  const border = [0, 0.007, 0, L.w, 0.007, 0, L.w, 0.007, L.h, 0, 0.007, L.h, 0, 0.007, 0];
+  const bg = new THREE.BufferGeometry();
+  bg.setAttribute('position', new THREE.Float32BufferAttribute(border, 3));
+  gPad.add(new THREE.Line(bg, new THREE.LineBasicMaterial({ color: 0x6f736a })));
+
+  for (const n of L.nodes) {
+    const ring = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.15, 0.16, 26),
+      new THREE.MeshLambertMaterial({ color: 0x6f6152 }));
+    ring.position.set(n.x, 0.06, n.z);
+    gPad.add(ring);
+    const s = makeSprite(n.rate + '/min');
+    s.position.set(n.x, 0.7, n.z);
+    gPad.add(s);
+  }
+  for (const r of L.rocks) {
+    const m = new THREE.Mesh(new THREE.DodecahedronGeometry(r.r),
+      new THREE.MeshLambertMaterial({ color: 0x8f9188 }));
+    m.position.set(r.x, r.r * 0.55, r.z);
+    m.rotation.set(r.x, r.z, 0.4);
+    gPad.add(m);
+  }
+}
+
+function makeSprite(text) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 64;
+  const g = c.getContext('2d');
+  g.font = '700 34px ui-monospace, Menlo, monospace';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = '#2b241c';
+  g.fillText(text, 128, 32);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
+  sp.scale.set(2.6, 0.65, 1);
+  return sp;
+}
+
+/* ============================================================
+   PLACEMENT
+   ============================================================ */
+function canPlace(type, x, z, rot, ignore) {
+  const probe = { type, x, z, rot };
+  if (!inPlot(probe)) return 'Outside the plot.';
+  const b = boxOf(probe);
+  for (const o of ents) {
+    if (o === ignore) continue;
+    if (boxesOverlap(b, boxOf(o))) return 'That overlaps ' + MACHINES[o.type].name + '.';
+  }
+  for (const r of L.rocks) {
+    if (inBox({ x: r.x, z: r.z }, { x0: b.x0 - r.r, x1: b.x1 + r.r, z0: b.z0 - r.r, z1: b.z1 + r.r })) return 'There is a rock there.';
+  }
+  const bi = boxOf(probe, BELT_HW);
+  for (const l of links) {
+    for (const p of l.path) if (inBox(p, bi)) return 'A belt runs through there.';
+  }
+  if (MACHINES[type].kind === 'miner') {
+    const n = L.nodes.find((n) => dist2(n, { x, z }) < 1.1 * 1.1);
+    if (!n) return 'A miner must sit on an ore node.';
+  }
+  return null;
+}
+
+function addEntity(type, x, z, rot) {
+  const def = MACHINES[type];
+  const e = { id: 'e' + (nextId++), type, x, z, rot: rot || 0, recipe: def.recipes[0] ? def.recipes[0].id : null };
+  if (def.kind === 'miner') {
+    const n = L.nodes.find((n) => dist2(n, { x, z }) < 1.4 * 1.4);
+    e.x = n ? n.x : x; e.z = n ? n.z : z;
+    e.nodeRate = n ? n.rate : 30;
+  }
+  ents.push(e);
+  return e;
+}
+function removeEntity(e) {
+  ents = ents.filter((x) => x !== e);
+  links = links.filter((l) => l.from !== e.id && l.to !== e.id);
+}
+const entById = (id) => ents.find((e) => e.id === id);
+
+function entAt(p) {
+  for (const e of ents) if (inBox(p, boxOf(e, 0.1))) return e;
+  return null;
+}
+function beltAt(p) {
+  for (const l of links) if (distToPath(p, l.path) < BELT_HW + 0.18) return l;
+  return null;
+}
+
+/* ============================================================
+   BELT PAINTING
+   ============================================================ */
+function outItemOf(e, depth) {
+  if (!e || (depth || 0) > 12) return null;
+  const d = MACHINES[e.type];
+  if (d.kind === 'splitter' || d.kind === 'merger') {
+    const up = links.find((l) => l.to === e.id);
+    return up ? outItemOf(entById(up.from), (depth || 0) + 1) : null;
+  }
+  const r = recipeOf(e);
+  return (r && Object.keys(r.out)[0]) || null;
+}
+
+/* which output port is still free? */
+function freeOutPort(e) {
+  const ports = portsOf(e).out;
+  const used = links.filter((l) => l.from === e.id).map((l) => l.fromPort);
+  for (let i = 0; i < ports.length; i++) if (!used.includes(i)) return i;
+  return -1;
+}
+/* which input port accepts this item? */
+function freeInPort(e, item) {
+  const P = portsOf(e);
+  const used = links.filter((l) => l.to === e.id).map((l) => l.toPort);
+  for (let i = 0; i < P.in.length; i++) {
+    if (used.includes(i)) continue;
+    const want = P.inItems[i];
+    if (want == null || want === item) return i;
+  }
+  return -1;
+}
+
+function portError(a, b, item) {
+  const da = MACHINES[a.type], db = MACHINES[b.type];
+  if (a === b) return 'A belt needs two different machines.';
+  if (da.kind === 'sink') return 'The depot only receives.';
+  if (db.kind === 'miner') return 'A miner takes no input.';
+  if (freeOutPort(a) < 0) {
+    return da.kind === 'splitter'
+      ? 'That splitter is full — three outputs is the limit.'
+      : da.name + ' has one output port. Place a splitter to fan the line out.';
+  }
+  if (db.kind !== 'sink' && db.kind !== 'splitter' && db.kind !== 'merger') {
+    const r = recipeOf(b);
+    if (!r || !Object.keys(r.in).length) return db.name + ' takes no input.';
+    if (item && !r.in[item]) return db.name + ' has no use for ' + ITEMS[item].name + '.';
+  }
+  if (freeInPort(b, item) < 0) {
+    if (db.kind === 'merger') return 'That merger is full — three inputs is the limit.';
+    if (db.kind === 'splitter') return 'A splitter takes one input. Use a merger to combine lines.';
+    return item ? 'The ' + ITEMS[item].name + ' port is already taken.' : 'All input ports are taken.';
+  }
+  return null;
+}
+
+/* Does a painted route keep clear of everything it should? */
+function routeBlocked(pts, srcEnt, dstEnt) {
+  for (const e of ents) {
+    if (e === srcEnt || e === dstEnt) continue;
+    const b = boxOf(e, CLEARANCE);
+    for (const p of pts) if (inBox(p, b)) return 'The route runs into ' + MACHINES[e.type].name + '.';
+  }
+  for (const r of L.rocks) {
+    const rr = (r.r + CLEARANCE) ** 2;
+    for (const p of pts) if (dist2(p, r) < rr) return 'The route clips a rock.';
+  }
+  for (const p of pts) {
+    if (p.x < 0.2 || p.z < 0.2 || p.x > L.w - 0.2 || p.z > L.h - 0.2) return 'The route leaves the plot.';
+  }
+  return null;
+}
+
+/* Turn a raw finger stroke into a conveyor: simplify, round the corners,
+   then keep smoothing until it respects a minimum turn radius. */
+function finishStroke(raw, a, aPort, b, bPort) {
+  const P = { a: portsOf(a).out[aPort], b: portsOf(b).in[bPort] };
+  let pts = [P.a].concat(raw.filter((p) => dist2(p, P.a) > 0.3 * 0.3 && dist2(p, P.b) > 0.3 * 0.3)), out;
+  pts.push(P.b);
+  pts = simplify(pts, SIMPLIFY_EPS);
+  let iters = 2;
+  do {
+    out = resample(chaikin(pts, iters), RESAMPLE);
+    iters++;
+  } while (minRadius(out) < MIN_RADIUS && iters <= 6);
+  return out;
+}
+
+function commitStroke(raw, endPoint) {
+  const a = stroke.fromEnt;
+  const item = outItemOf(a);
+  /* find the target: whatever machine the stroke ended on or nearest to */
+  let b = entAt(endPoint);
+  if (!b) {
+    let best = null, bd = SNAP_RADIUS * SNAP_RADIUS;
+    for (const e of ents) {
+      if (e === a) continue;
+      for (const p of portsOf(e).in) {
+        const d = dist2(p, endPoint);
+        if (d < bd) { bd = d; best = e; }
+      }
+    }
+    b = best;
+  }
+  if (!b) return toast('End the stroke on a machine.');
+  const pe = portError(a, b, item);
+  if (pe) return toast(pe);
+  const bPort = freeInPort(b, item), aPort = stroke.fromPort;
+  const pts = finishStroke(raw, a, aPort, b, bPort);
+  const blocked = routeBlocked(pts, a, b);
+  if (blocked) return toast(blocked);
+  const arc = arcTable(pts);
+  const len = arc[arc.length - 1];
+  if (len < 0.4) return toast('Too short to be a belt.');
+  const tier = BELTS.find((t) => t.id === beltTier) || BELTS[0];
+  links.push({ id: 'l' + (nextId++), from: a.id, to: b.id, fromPort: aPort, toPort: bPort,
+               cap: tier.cap, tier: tier.id, path: pts, arc, length: len, bumps: [] });
+  computeCrossings();
+  resolve();
+  toast('Belt ' + tier.name + ' · ' + len.toFixed(1) + ' m');
+}
+
+/* Where two belts cross, the later one ramps over. This is what the third
+   dimension is for (§5.2). */
+function computeCrossings() {
+  for (const l of links) l.bumps = [];
+  for (let i = 0; i < links.length; i++) {
+    for (let j = i + 1; j < links.length; j++) {
+      const A = links[i], B = links[j];
+      for (let x = 0; x < A.path.length - 1; x++) {
+        for (let y = 0; y < B.path.length - 1; y++) {
+          const hit = segHit(A.path[x], A.path[x + 1], B.path[y], B.path[y + 1]);
+          if (!hit) continue;
+          const sA = A.arc[x] + hit.t * (A.arc[x + 1] - A.arc[x]);
+          const sB = B.arc[y] + hit.u * (B.arc[y + 1] - B.arc[y]);
+          /* Two runs feeding the same machine converge near their ports; that is not a
+             crossing to ramp over. Guard by distance from each end, not by topology —
+             belts sharing a machine can still genuinely cross out in the open. */
+          if (sA < ENDPOINT_GUARD || sA > A.length - ENDPOINT_GUARD) continue;
+          if (sB < ENDPOINT_GUARD || sB > B.length - ENDPOINT_GUARD) continue;
+          if (!B.bumps.some((bp) => Math.abs(bp.s - sB) < 0.7)) B.bumps.push({ s: sB });
+        }
+      }
+    }
+  }
+}
+function segHit(p1, p2, p3, p4) {
+  const d1x = p2.x - p1.x, d1z = p2.z - p1.z, d2x = p4.x - p3.x, d2z = p4.z - p3.z;
+  const den = d1x * d2z - d1z * d2x;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((p3.x - p1.x) * d2z - (p3.z - p1.z) * d2x) / den;
+  const u = ((p3.x - p1.x) * d1z - (p3.z - p1.z) * d1x) / den;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return { t, u };
+}
+function yAt(l, s) {
+  let y = BELT_Y;
+  for (const b of l.bumps) y += BUMP_H * Math.exp(-((s - b.s) ** 2) / (2 * BUMP_SIG * BUMP_SIG));
+  return y;
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function buildMachines() {
+  clear(gMachines);
+  for (const e of ents) {
+    const def = MACHINES[e.type], b = boxOf(e);
+    const g = new THREE.Group();
+    const bodyH = (def.kind === 'splitter' || def.kind === 'merger') ? 0.3 : 0.62;
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(b.ex * 2 - 0.12, bodyH, b.ez * 2 - 0.12),
+      new THREE.MeshLambertMaterial({ color: MACHINE_COLOR[e.type] }));
+    body.position.set(e.x, bodyH / 2, e.z);
+    g.add(body);
+    if (def.kind === 'machine' || def.kind === 'miner') {
+      const cap = new THREE.Mesh(
+        new THREE.BoxGeometry(Math.min(b.ex, b.ez), 0.34, Math.min(b.ex, b.ez)),
+        new THREE.MeshLambertMaterial({ color: 0xe6e2d5 }));
+      cap.position.set(e.x, bodyH + 0.17, e.z);
+      g.add(cap);
+    }
+    /* ports, so the player can see where a stroke may begin and end */
+    const P = portsOf(e);
+    for (const p of P.out) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.34),
+        new THREE.MeshLambertMaterial({ color: 0x1b2124 }));
+      m.position.set(p.x, bodyH + 0.02, p.z);
+      g.add(m);
+    }
+    P.in.forEach((p, i) => {
+      const item = P.inItems[i];
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.14, 0.3),
+        new THREE.MeshLambertMaterial({ color: item ? ITEMS[item].color : 0xf0eee5 }));
+      m.position.set(p.x, bodyH + 0.02, p.z);
+      g.add(m);
+    });
+    if (e === selected) {
+      const halo = new THREE.Mesh(
+        new THREE.RingGeometry(Math.max(b.ex, b.ez) + 0.16, Math.max(b.ex, b.ez) + 0.26, 40),
+        new THREE.MeshBasicMaterial({ color: 0x161d21, side: THREE.DoubleSide }));
+      halo.rotation.x = -Math.PI / 2;
+      halo.position.set(e.x, 0.03, e.z);
+      g.add(halo);
+    }
+    gMachines.add(g);
+  }
+}
+
+function buildRings() {
+  clear(gRings);
+  if (phase === 'edit') return;
+  for (const e of ents) {
+    const def = MACHINES[e.type];
+    if (def.kind === 'splitter' || def.kind === 'merger' || def.kind === 'sink') continue;
+    if (!isLive(e)) continue;
+    const b = boxOf(e);
+    const r = Math.max(b.ex, b.ez) + 0.3;
+    const frac = Math.max(0.001, Math.min(1, e.f || 0));
+    const track = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.14, 44),
+      new THREE.MeshBasicMaterial({ color: 0xb0b3aa, side: THREE.DoubleSide }));
+    track.rotation.x = -Math.PI / 2;
+    track.position.set(e.x, 0.02, e.z);
+    gRings.add(track);
+    const fill = new THREE.Mesh(
+      new THREE.RingGeometry(r, r + 0.14, Math.max(3, Math.ceil(44 * frac)), 1, Math.PI / 2, -Math.PI * 2 * frac),
+      new THREE.MeshBasicMaterial({ color: STATE_COLOR[e.state] || 0x888888, side: THREE.DoubleSide }));
+    fill.rotation.x = -Math.PI / 2;
+    fill.position.set(e.x, 0.028, e.z);
+    gRings.add(fill);
+  }
+}
+
+/* one ribbon mesh for every belt, built by hand so it can carry vertex colours
+   and per-point elevation for the crossings */
+function ribbon(list, colorFor) {
+  const pos = [], col = [], idx = [], nrm = [];
+  let base = 0;
+  const c = new THREE.Color();
+  for (const l of list) {
+    const pts = l.path;
+    if (!pts || pts.length < 2) continue;
+    const arc = l.arc || arcTable(pts);
+    colorFor(l, c);
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+      let tx = b.x - a.x, tz = b.z - a.z;
+      const tl = Math.hypot(tx, tz) || 1;
+      tx /= tl; tz /= tl;
+      const y = yAt(l, arc[i]);
+      pos.push(p.x - tz * BELT_HW, y, p.z + tx * BELT_HW);
+      pos.push(p.x + tz * BELT_HW, y, p.z - tx * BELT_HW);
+      nrm.push(0, 1, 0, 0, 1, 0);
+      col.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    }
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = base + i * 2;
+      idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+    }
+    base += pts.length * 2;
+  }
+  if (!pos.length) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  return g;
+}
+
+function buildBelts() {
+  clear(gBelts);
+  const g = ribbon(links, (l, c) => {
+    const tier = BELTS.find((t) => t.id === l.tier) || BELTS[0];
+    c.setHex(tier.color);
+    if (phase !== 'edit') {
+      const load = Math.min(1, (l.flow || 0) / l.cap);
+      c.lerp(new THREE.Color(0xffffff), 0.12 + load * 0.5);
+      if (l.saturated && l.overCapacity) c.setHex(0xc2402f);
+    }
+  });
+  if (!g) return;
+  gBelts.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })));
+}
+
+const itemMeshes = {};
+function buildItemPools() {
+  clear(gItems);
+  for (const k of Object.keys(itemMeshes)) delete itemMeshes[k];
+  for (const key of Object.keys(ITEMS)) {
+    const m = new THREE.InstancedMesh(new THREE.BoxGeometry(0.26, 0.2, 0.26),
+      new THREE.MeshLambertMaterial({ color: ITEMS[key].color }), MAX_ITEMS_PER_TYPE);
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    m.count = 0; m.frustumCulled = false;
+    itemMeshes[key] = m;
+    gItems.add(m);
+  }
+}
+
+function posAt(l, s) {
+  const arc = l.arc, pts = l.path;
+  let i = 1;
+  while (i < arc.length - 1 && arc[i] < s) i++;
+  const t = (s - arc[i - 1]) / Math.max(1e-6, arc[i] - arc[i - 1]);
+  return {
+    x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t,
+    z: pts[i - 1].z + (pts[i].z - pts[i - 1].z) * t,
+    y: yAt(l, s) + 0.11,
+  };
+}
+
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _sc = new THREE.Vector3(1, 1, 1), _v = new THREE.Vector3();
+function updateItems(t) {
+  const counts = {};
+  for (const k of Object.keys(itemMeshes)) counts[k] = 0;
+  if (phase !== 'edit') {
+    for (const l of links) {
+      if (!l.item || !l.flow || l.flow < 1e-4) continue;
+      const mesh = itemMeshes[l.item];
+      if (!mesh) continue;
+      const len = l.length;
+      let spacing = BELT_SPEED * 60 / l.flow;
+      if (len / spacing > MAX_ITEMS_PER_TYPE / 6) spacing = len / (MAX_ITEMS_PER_TYPE / 6);
+      const front = (t - (l.startT || 0)) * BELT_SPEED;
+      if (front <= 0) continue;
+      for (let s = front % spacing; s <= Math.min(len, front); s += spacing) {
+        if (counts[l.item] >= MAX_ITEMS_PER_TYPE) break;
+        const p = posAt(l, s);
+        _v.set(p.x, p.y, p.z);
+        _m.compose(_v, _q, _sc);
+        mesh.setMatrixAt(counts[l.item]++, _m);
+      }
+    }
+  }
+  for (const k of Object.keys(itemMeshes)) {
+    itemMeshes[k].count = counts[k];
+    itemMeshes[k].instanceMatrix.needsUpdate = true;
+  }
+}
+
+/* ============================================================
+   SOLVE + SPIN-UP
+   ============================================================ */
+function resolve() {
+  result = solve({ entities: ents, links });
+  scheduleSpinUp();
+  buildAll();
+  refreshQuotas();
+  updateRuler();
+}
+function scheduleSpinUp() {
+  const inL = new Map(ents.map((e) => [e.id, []]));
+  for (const l of links) if (inL.has(l.to)) inL.get(l.to).push(l);
+  for (const e of ents) e.startT = MACHINES[e.type].kind === 'miner' ? 0.35 : Infinity;
+  for (const l of links) l.startT = Infinity;
+  let changed = true, guard = 0;
+  while (changed && guard++ < 200) {
+    changed = false;
+    for (const l of links) {
+      const src = entById(l.from);
+      if (src && src.startT < l.startT - 1e-6) { l.startT = src.startT; changed = true; }
+    }
+    for (const e of ents) {
+      const ins = inL.get(e.id) || [];
+      if (!ins.length) continue;
+      let ready = 0;
+      for (const l of ins) {
+        if (l.startT === Infinity) { ready = Infinity; break; }
+        ready = Math.max(ready, l.startT + l.length / BELT_SPEED);
+      }
+      const t = ready === Infinity ? Infinity : ready + 0.3;
+      if (t < e.startT - 1e-6) { e.startT = t; changed = true; }
+    }
+  }
+  spinUp = 0;
+  for (const e of ents) if (isFinite(e.startT) && (e.f || 0) > 1e-4) spinUp = Math.max(spinUp, e.startT);
+  for (const l of links) if (isFinite(l.startT) && (l.flow || 0) > 1e-4) spinUp = Math.max(spinUp, l.startT + l.length / BELT_SPEED);
+  spinUp += 0.5;
+}
+const isLive = (e) => phase !== 'edit' && isFinite(e.startT) && runT >= e.startT;
+function buildAll() { buildMachines(); buildBelts(); buildRings(); }
+
+function beltMetres() { let s = 0; for (const l of links) s += l.length; return s; }
+
+/* ============================================================
+   UI
+   ============================================================ */
+const $ = (s) => document.querySelector(s);
+const fmt = (v) => (Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : v.toFixed(1));
+let toastTimer = null;
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg; t.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('on'), 2100);
+}
+function updateRuler() {
+  const el = $('#ruler');
+  el.classList.toggle('on', links.length > 0);
+  el.textContent = beltMetres().toFixed(1) + ' m of belt · ' + links.length + ' run' + (links.length === 1 ? '' : 's');
+}
+
+function buildTray() {
+  const el = $('#trayScroll');
+  el.innerHTML = '';
+  for (const type of L.tech) {
+    const def = MACHINES[type];
+    for (const r of (def.recipes.length ? def.recipes : [null])) {
+      const card = document.createElement('button');
+      card.className = 'card' + (pickedType === type && (!r || pickedRecipe === r.id) ? ' on' : '');
+      const ins = r && Object.keys(r.in).length ? Object.entries(r.in).map(([k, v]) => v + ' ' + ITEMS[k].short).join(' + ') : '—';
+      const outs = r && Object.keys(r.out).length ? Object.entries(r.out).map(([k, v]) => v + ' ' + ITEMS[k].short).join(' + ') : 'pass through';
+      card.innerHTML = '<div class="bar" style="background:#' + MACHINE_COLOR[type].toString(16).padStart(6, '0') + '"></div>'
+        + '<div class="cn">' + (r && def.recipes.length > 1 ? r.label : def.name) + '</div>'
+        + '<div class="cr">' + ins + '<br>&#8595; ' + outs + '</div>';
+      card.onclick = () => { pickedType = type; pickedRecipe = r ? r.id : null; setTool('place'); buildTray(); };
+      el.appendChild(card);
+    }
+  }
+  for (const t of L.belts) {
+    const tier = BELTS.find((b) => b.id === t);
+    const card = document.createElement('button');
+    card.className = 'card' + (tool === 'belt' && beltTier === t ? ' on' : '');
+    card.innerHTML = '<div class="bar" style="background:#' + tier.color.toString(16).padStart(6, '0') + '"></div>'
+      + '<div class="cn">Belt ' + tier.name + '</div><div class="cr">' + tier.cap + '/min cap</div>';
+    card.onclick = () => { beltTier = t; setTool('belt'); buildTray(); };
+    el.appendChild(card);
+  }
+}
+
+function setTool(t) {
+  tool = t;
+  stroke = null;
+  document.querySelectorAll('.tbtn[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === t));
+  if (t !== 'place') { pickedType = null; pickedRecipe = null; }
+  clear(gGhost);
+}
+
+function refreshQuotas() {
+  const box = $('#quotas');
+  box.innerHTML = '';
+  const got = (result && result.output) || {};
+  for (const [item, need] of Object.entries(L.quota)) {
+    const have = got[item] || 0;
+    const d = document.createElement('div');
+    d.className = 'q' + (have >= need - 1e-4 && phase === 'validated' ? ' met' : '');
+    d.innerHTML = '<span class="sw" style="background:#' + ITEMS[item].color.toString(16).padStart(6, '0') + '"></span>'
+      + ITEMS[item].name + ' <b>' + need + '</b>/min<span class="got">· '
+      + (phase === 'edit' ? 'idle' : fmt(have)) + '</span>';
+    box.appendChild(d);
+  }
+}
+
+function buildLevelBar() {
+  const el = $('#levelBar');
+  el.innerHTML = '';
+  LEVELS.forEach((lv, i) => {
+    const b = document.createElement('button');
+    b.className = 'lv' + (i === lvIndex ? ' on' : '') + (solved[lv.id] ? ' done' : '');
+    b.textContent = i + 1;
+    b.onclick = () => loadLevel(i);
+    el.appendChild(b);
+  });
+}
+
+function showInspector(e) {
+  const box = $('#insp');
+  if (!e) { box.style.display = 'none'; return; }
+  const def = MACHINES[e.type], r = recipeOf(e);
+  let html = '<h4>' + def.name + (r && def.recipes.length > 1 ? ' · ' + r.label : '') + '</h4>';
+  if (phase !== 'edit' && def.kind !== 'sink' && def.kind !== 'splitter' && def.kind !== 'merger') {
+    html += '<div class="row"><span>Running at</span><b style="color:#'
+      + (STATE_COLOR[e.state] || 0x888888).toString(16).padStart(6, '0') + '">'
+      + Math.round((e.f || 0) * 100) + '%</b></div>';
+    if (r) {
+      for (const [it, need] of Object.entries(r.in))
+        html += '<div class="row"><span>' + ITEMS[it].short + ' in</span><span>'
+          + fmt((e.avail && e.avail[it]) || 0) + ' / ' + need + '</span></div>';
+      for (const [it, out] of Object.entries(r.out))
+        html += '<div class="row"><span>' + ITEMS[it].short + ' out</span><span>'
+          + fmt(out * (e.f || 0)) + ' / ' + out + '</span></div>';
+    }
+    const d = Object.entries(e.deficits || {});
+    if (d.length) {
+      html += '<div class="why">Short ' + d.map(([k, v]) => fmt(v) + ' ' + ITEMS[k].short).join(', ') + ' per minute.';
+      if (e.limitedBy) {
+        const l = e.limitedBy;
+        html += ' Traced to the ' + BELTS.find((b) => b.id === l.tier).name + ' belt carrying '
+          + ITEMS[l.item].name + ' — caps at ' + l.cap + '/min, wants ' + fmt(l.potFlow || 0) + '.';
+      }
+      html += '</div>';
+    } else if (e.isRootCause) {
+      html += '<div class="why">This is the bottleneck. Its output belt is full.</div>';
+    }
+  } else if (r) {
+    html += '<div class="row"><span>Takes</span><span>'
+      + (Object.entries(r.in).map(([k, v]) => v + ' ' + ITEMS[k].short).join(' + ') || '—') + '/min</span></div>';
+    html += '<div class="row"><span>Makes</span><span>'
+      + (Object.entries(r.out).map(([k, v]) => v + ' ' + ITEMS[k].short).join(' + ') || '—') + '/min</span></div>';
+  }
+  html += '<div class="acts">';
+  if (def.recipes.length > 1) html += '<button data-act="recipe">Change recipe</button>';
+  if (def.kind !== 'sink') html += '<button data-act="del">Remove</button>';
+  html += '</div>';
+  box.innerHTML = html;
+  box.style.display = 'block';
+  box.querySelectorAll('button').forEach((b) => b.onclick = () => {
+    if (b.dataset.act === 'del') { removeEntity(e); selected = null; showInspector(null); computeCrossings(); resolve(); }
+    if (b.dataset.act === 'recipe') {
+      const rs = def.recipes, i = rs.findIndex((x) => x.id === e.recipe);
+      e.recipe = rs[(i + 1) % rs.length].id;
+      /* input ports may have changed identity — drop links that no longer fit */
+      links = links.filter((l) => {
+        if (l.to !== e.id) return true;
+        const P = portsOf(e);
+        return l.toPort < P.in.length;
+      });
+      computeCrossings(); resolve(); showInspector(e);
+    }
+  });
+}
+
+function showBeltInspector(l) {
+  const box = $('#insp');
+  const tier = BELTS.find((b) => b.id === l.tier);
+  let html = '<h4>Belt ' + tier.name + '</h4>'
+    + '<div class="row"><span>Capacity</span><span>' + l.cap + '/min</span></div>'
+    + '<div class="row"><span>Length</span><span>' + l.length.toFixed(1) + ' m</span></div>';
+  if (l.bumps.length) html += '<div class="row"><span>Crossings</span><span>' + l.bumps.length + ' over</span></div>';
+  if (phase !== 'edit') {
+    html += '<div class="row"><span>Carrying</span><span>' + (l.item ? ITEMS[l.item].short : '—') + '</span></div>'
+      + '<div class="row"><span>Load</span><span>' + fmt(l.flow || 0) + ' / ' + l.cap + '</span></div>';
+    if (l.overCapacity) html += '<div class="why">Wants ' + fmt(l.potFlow) + '/min. This belt is the bottleneck.</div>';
+  }
+  html += '<div class="acts">';
+  for (const u of L.belts.filter((t) => t !== l.tier)) html += '<button data-tier="' + u + '">To ' + BELTS.find((b) => b.id === u).name + '</button>';
+  html += '<button data-act="del">Remove</button></div>';
+  box.innerHTML = html;
+  box.style.display = 'block';
+  box.querySelectorAll('button').forEach((b) => b.onclick = () => {
+    if (b.dataset.act === 'del') links = links.filter((x) => x !== l);
+    else { const t = +b.dataset.tier; l.tier = t; l.cap = BELTS.find((x) => x.id === t).cap; }
+    selected = null; showInspector(null); computeCrossings(); resolve();
+  });
+}
+
+const labelPool = [];
+function updateLabels() {
+  const host = $('#labels');
+  host.classList.toggle('on', plannerOn);
+  if (!plannerOn) return;
+  let n = 0;
+  const put = (x, y, z, text, cls) => {
+    let el = labelPool[n];
+    if (!el) { el = document.createElement('div'); el.className = 'tag'; host.appendChild(el); labelPool[n] = el; }
+    const p = new THREE.Vector3(x, y, z).project(camera);
+    el.style.left = ((p.x * 0.5 + 0.5) * innerWidth) + 'px';
+    el.style.top = ((-p.y * 0.5 + 0.5) * innerHeight) + 'px';
+    el.className = 'tag ' + (cls || '');
+    el.innerHTML = text;
+    el.style.display = 'block';
+    n++;
+  };
+  for (const e of ents) {
+    const def = MACHINES[e.type];
+    if (def.kind === 'sink') continue;
+    if (phase === 'edit') {
+      const r = recipeOf(e);
+      if (!r) continue;
+      put(e.x, 1.2, e.z, Object.entries(r.out).map(([k, v]) => v + ' ' + ITEMS[k].short).join('+') + '/min');
+    } else if (isLive(e) && def.kind !== 'splitter' && def.kind !== 'merger') {
+      const pct = Math.round((e.f || 0) * 100);
+      const cls = pct >= 100 ? 'ok' : (e.state === 'blocked' ? 'bad' : 'warn');
+      let txt = '<b>' + pct + '%</b>';
+      const d = Object.entries(e.deficits || {});
+      if (d.length) txt += ' ' + d.map(([k, v]) => '&minus;' + fmt(v) + ' ' + ITEMS[k].short).join(' ');
+      put(e.x, 1.2, e.z, txt, cls);
+    }
+  }
+  for (const l of links) {
+    const mid = l.path[Math.floor(l.path.length / 2)];
+    if (!mid) continue;
+    if (phase === 'edit') put(mid.x, 0.8, mid.z, l.length.toFixed(1) + ' m · ' + l.cap + ' cap');
+    else {
+      const cls = l.saturated && l.overCapacity ? 'bad' : (l.saturated ? 'warn' : '');
+      put(mid.x, 0.8, mid.z, fmt(l.flow || 0) + ' / ' + l.cap, cls);
+    }
+  }
+  for (let i = n; i < labelPool.length; i++) labelPool[i].style.display = 'none';
+}
+
+/* ============================================================
+   RUN
+   ============================================================ */
+function startRun() {
+  resolve();
+  phase = 'running'; runT = 0;
+  $('#run').textContent = 'Stop'; $('#run').classList.add('live');
+  setTool('select');
+  buildItemPools(); buildAll();
+  toast('Cold start — ' + spinUp.toFixed(1) + 's to steady state');
+}
+function stopRun() {
+  phase = 'edit'; runT = 0;
+  $('#run').textContent = 'Run factory'; $('#run').classList.remove('live');
+  $('#report').style.display = 'none';
+  buildAll(); refreshQuotas();
+}
+function validate() {
+  phase = 'validated';
+  const got = result.output || {};
+  const met = Object.entries(L.quota).every(([k, v]) => (got[k] || 0) >= v - 1e-4);
+  refreshQuotas(); buildAll();
+  if (met) { solved[L.id] = true; buildLevelBar(); }
+  showReport(met);
+}
+function showReport(met) {
+  const sc = score({ entities: ents, links }, result);
+  const rows = [
+    ['Machines', sc.machines, L.par.machines, 'fewer is better'],
+    ['Belt', +beltMetres().toFixed(1), L.par.belt, 'metres painted — short, clean runs win'],
+    ['Ore', Math.round(sc.ore), L.par.ore, 'raw ore per minute'],
+  ];
+  let html = '<h3>' + (met ? 'Quota met' : 'Quota not met') + '</h3>'
+    + '<div class="sub">' + L.name + ' · steady state in ' + spinUp.toFixed(1) + 's</div>';
+  if (!met) {
+    const got = result.output || {};
+    html += '<div class="sub">Output: ' + Object.entries(L.quota)
+      .map(([k, v]) => fmt(got[k] || 0) + ' of ' + v + ' ' + ITEMS[k].short).join(' · ') + '</div>';
+    const bn = result.bottlenecks[0];
+    if (bn) html += '<div class="sub">The ' + BELTS.find((b) => b.id === bn.tier).name + ' belt carrying '
+      + ITEMS[bn.item].name + ' is the bottleneck: ' + bn.cap + '/min cap, ' + fmt(bn.potFlow) + '/min wanted.</div>';
+    else html += '<div class="sub">Turn on the planner to see which machines are short.</div>';
+  } else {
+    for (const [name, val, par, cap] of rows) {
+      const worst = Math.max(val, par) * 1.6 || 1;
+      html += '<div class="metric"><div class="top"><span>' + name + '</span><span>' + val
+        + '<span style="color:#6d7570"> · target ' + par + '</span></span></div>'
+        + '<div class="track"><div class="fill" style="width:' + (100 * val / worst) + '%;'
+        + (val <= par ? 'background:#2f9e6f' : '') + '"></div>'
+        + '<div class="par" style="left:' + (100 * par / worst) + '%"></div></div>'
+        + '<div class="cap">' + cap + '</div></div>';
+    }
+  }
+  html += '<div class="acts">'
+    + (met && lvIndex < LEVELS.length - 1 ? '<button data-a="next">Next level</button>' : '')
+    + '<button class="ghost" data-a="back">Keep tinkering</button></div>';
+  const card = $('#rcard');
+  card.innerHTML = html;
+  card.querySelectorAll('button').forEach((b) => b.onclick = () => {
+    $('#report').style.display = 'none';
+    if (b.dataset.a === 'next') loadLevel(lvIndex + 1); else stopRun();
+  });
+  $('#report').style.display = 'flex';
+}
+
+/* ============================================================
+   INPUT
+   ============================================================ */
+const pointers = new Map();
+let dragMode = null, dragStart = null, pinchStart = 0, camStart = null, moved = 0;
+
+function groundAt(cx, cy) {
+  raycaster.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), camera);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(groundPlane, hit)) return null;
+  return { x: hit.x, z: hit.z };
+}
+
+const cv = renderer.domElement;
+cv.addEventListener('pointerdown', (ev) => {
+  cv.setPointerCapture(ev.pointerId);
+  pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  moved = 0;
+  if (pointers.size === 2) {
+    const p = [...pointers.values()];
+    pinchStart = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+    dragMode = 'pinch'; camStart = zoom;
+    stroke = null; clear(gGhost);
+    return;
+  }
+  dragStart = { x: ev.clientX, y: ev.clientY };
+  camStart = camCenter.clone();
+  const g = groundAt(ev.clientX, ev.clientY);
+  if (tool === 'belt' && g) {
+    /* begin a stroke at the nearest free output port */
+    let bestE = null, bestP = -1, bd = SNAP_RADIUS * SNAP_RADIUS;
+    for (const e of ents) {
+      const free = freeOutPort(e);
+      if (free < 0) continue;
+      const p = portsOf(e).out[free];
+      const d = dist2(p, g);
+      const onBody = inBox(g, boxOf(e, 0.2));
+      if (onBody || d < bd) { bd = onBody ? -1 : d; bestE = e; bestP = free; }
+    }
+    if (bestE) {
+      stroke = { fromEnt: bestE, fromPort: bestP, pts: [] };
+      dragMode = 'paint';
+      return;
+    }
+    const blocked = ents.find((e) => inBox(g, boxOf(e, 0.2)));
+    if (blocked) toast(portError(blocked, blocked, null) || (MACHINES[blocked.type].name + ' has no free output port.'));
+  }
+  dragMode = 'maybe';
+});
+
+cv.addEventListener('pointermove', (ev) => {
+  if (!pointers.has(ev.pointerId)) {
+    if (tool === 'place' && pickedType) ghostAt(ev.clientX, ev.clientY);
+    return;
+  }
+  pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (dragMode === 'pinch' && pointers.size === 2) {
+    const p = [...pointers.values()];
+    const d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+    zoom = Math.max(10, Math.min(72, camStart * (pinchStart / Math.max(1, d))));
+    layoutCamera();
+    return;
+  }
+  const dx = ev.clientX - dragStart.x, dy = ev.clientY - dragStart.y;
+  moved = Math.max(moved, Math.hypot(dx, dy));
+
+  if (dragMode === 'paint' && stroke) {
+    const g = groundAt(ev.clientX, ev.clientY);
+    if (!g) return;
+    const last = stroke.pts[stroke.pts.length - 1];
+    if (!last || dist2(last, g) > STROKE_MIN_STEP * STROKE_MIN_STEP) stroke.pts.push(g);
+    drawStrokePreview();
+    return;
+  }
+  if (moved > 9) dragMode = 'pan';
+  if (dragMode === 'pan') {
+    const scale = zoom / innerHeight;
+    const rx = -dx * scale, rz = -dy * scale / Math.cos(PITCH);
+    const s = Math.sin(yaw), c = Math.cos(yaw);
+    camCenter.set(camStart.x + rx * c + rz * s, 0, camStart.z - rx * s + rz * c);
+  }
+});
+
+cv.addEventListener('pointerup', (ev) => {
+  const wasTap = moved < 9 && pointers.size === 1;
+  const painting = dragMode === 'paint' && stroke;
+  const g = groundAt(ev.clientX, ev.clientY);
+  pointers.delete(ev.pointerId);
+  if (painting) {
+    clear(gGhost);
+    if (stroke.pts.length >= 1 && g) commitStroke(stroke.pts, g);
+    else toast('Drag from one machine to another to lay a belt.');
+    stroke = null;
+  } else if (wasTap && g) {
+    handleTap(g);
+  }
+  if (!pointers.size) dragMode = null;
+});
+cv.addEventListener('pointercancel', (ev) => { pointers.delete(ev.pointerId); dragMode = null; stroke = null; clear(gGhost); });
+cv.addEventListener('wheel', (ev) => {
+  ev.preventDefault();
+  zoom = Math.max(10, Math.min(72, zoom * (1 + Math.sign(ev.deltaY) * 0.09)));
+  layoutCamera();
+}, { passive: false });
+
+function drawStrokePreview() {
+  clear(gGhost);
+  const a = stroke.fromEnt;
+  const start = portsOf(a).out[stroke.fromPort];
+  const pts = resample(chaikin(simplify([start].concat(stroke.pts), SIMPLIFY_EPS), 2), RESAMPLE);
+  if (pts.length < 2) return;
+  const bad = routeBlocked(pts, a, entAt(pts[pts.length - 1]));
+  const fake = { path: pts, arc: arcTable(pts), tier: beltTier, bumps: [] };
+  const g = ribbon([fake], (l, c) => c.setHex(bad ? 0xc2402f : 0x2f9e6f));
+  if (g) gGhost.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55, side: THREE.DoubleSide })));
+}
+
+function handleTap(g) {
+  if (tool === 'place' && pickedType) {
+    const err = canPlace(pickedType, g.x, g.z, pickedRot);
+    if (err) return toast(err);
+    const e = addEntity(pickedType, g.x, g.z, pickedRot);
+    if (pickedRecipe) e.recipe = pickedRecipe;
+    resolve();
+    return;
+  }
+  if (tool === 'erase') {
+    const e = entAt(g);
+    if (e && MACHINES[e.type].kind !== 'sink') { removeEntity(e); computeCrossings(); resolve(); return; }
+    const l = beltAt(g);
+    if (l) { links = links.filter((x) => x !== l); computeCrossings(); resolve(); return; }
+    return;
+  }
+  const e = entAt(g);
+  if (e) { selected = e; buildMachines(); showInspector(e); return; }
+  const l = beltAt(g);
+  if (l) { selected = null; buildMachines(); showBeltInspector(l); return; }
+  selected = null; buildMachines(); showInspector(null);
+}
+
+function ghostAt(cx, cy) {
+  clear(gGhost);
+  const g = groundAt(cx, cy);
+  if (!g) return;
+  const err = canPlace(pickedType, g.x, g.z, pickedRot);
+  const probe = { type: pickedType, x: g.x, z: g.z, rot: pickedRot };
+  const b = boxOf(probe);
+  const m = new THREE.Mesh(new THREE.BoxGeometry(b.ex * 2, 0.6, b.ez * 2),
+    new THREE.MeshBasicMaterial({ color: err ? 0xc2402f : 0x2f9e6f, transparent: true, opacity: 0.34 }));
+  m.position.set(g.x, 0.3, g.z);
+  gGhost.add(m);
+  const dir = DIRS[pickedRot % 4];
+  const nib = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.3, 0.34),
+    new THREE.MeshBasicMaterial({ color: 0x1b2124, transparent: true, opacity: 0.6 }));
+  nib.position.set(g.x + dir[0] * b.ez, 0.4, g.z + dir[1] * b.ez);
+  gGhost.add(nib);
+}
+
+document.querySelectorAll('.tbtn[data-tool]').forEach((b) => b.onclick = () => setTool(b.dataset.tool));
+$('#rotBtn').onclick = () => {
+  if (selected && MACHINES[selected.type].kind !== 'sink') {
+    const old = selected.rot;
+    selected.rot = (selected.rot + 1) % 4;
+    const err = canPlace(selected.type, selected.x, selected.z, selected.rot, selected);
+    if (err) { selected.rot = old; return toast('No room to turn that.'); }
+    links = links.filter((l) => l.from !== selected.id && l.to !== selected.id);
+    computeCrossings(); resolve();
+    toast('Turned. Belts on that machine were removed.');
+  } else {
+    pickedRot = (pickedRot + 1) % 4;
+    toast('Placing at ' + (pickedRot * 90) + '°');
+  }
+};
+$('#camBtn').onclick = () => { yawTarget += Math.PI / 2; };
+$('#run').onclick = () => (phase === 'edit' ? startRun() : stopRun());
+$('#plannerBtn').onclick = () => { plannerOn = !plannerOn; $('#plannerBtn').classList.toggle('on', plannerOn); };
+$('#clearBtn').onclick = () => {
+  ents = ents.filter((e) => MACHINES[e.type].kind === 'sink');
+  links = []; selected = null; showInspector(null);
+  stopRun(); resolve();
+};
+addEventListener('resize', layoutCamera);
+
+/* ============================================================
+   LEVEL LOAD
+   ============================================================ */
+function loadLevel(i) {
+  lvIndex = Math.max(0, Math.min(LEVELS.length - 1, i));
+  L = LEVELS[lvIndex];
+  ents = []; links = []; nextId = 1;
+  selected = null; stroke = null; result = null;
+  phase = 'edit'; runT = 0; plannerOn = false;
+  $('#plannerBtn').classList.remove('on');
+  $('#run').textContent = 'Run factory'; $('#run').classList.remove('live');
+  $('#report').style.display = 'none';
+  showInspector(null);
+
+  addEntity('sink', L.depot.x, L.depot.z, 2);
+  beltTier = L.belts[0];
+  camCenter.set(L.w / 2, 0, L.h / 2);
+  zoom = Math.max(L.w, L.h) * 1.5;
+  yaw = yawTarget = 0;
+  layoutCamera();
+
+  $('#lvId').textContent = 'LV ' + String(lvIndex + 1).padStart(2, '0');
+  $('#lvName').textContent = L.name;
+  $('#lvHint').textContent = L.hint;
+  buildPad(); buildTray(); buildLevelBar(); buildItemPools();
+  setTool('select');
+  resolve();
+  $('#levelBar').style.top = ($('#docket').offsetHeight + 8) + 'px';
+}
+
+/* ============================================================
+   LOOP
+   ============================================================ */
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  if (Math.abs(yawTarget - yaw) > 1e-4) yaw += (yawTarget - yaw) * Math.min(1, dt * 9);
+  placeCamera();
+  if (phase === 'running') {
+    runT += dt;
+    buildRings();
+    if (runT >= spinUp) validate();
+  }
+  updateItems(runT);
+  updateLabels();
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+layoutCamera();
+loadLevel(0);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
