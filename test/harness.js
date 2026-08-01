@@ -169,7 +169,11 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'snapPlacement',
   'inboundItems',
   'repairInputSlots',
-  'BELT_Y'];
+  'BELT_Y',
+  'beltBackedUp',
+  'beltItemCapacity',
+  'flowSignature',
+  'keepItemTags'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
@@ -2182,3 +2186,86 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 15400);
+
+/* --- a running factory must be visually stable ---
+   The belt colour is derived from its flow, and the geometry is rebuilt whenever the solved
+   flows change. The predicate telling the solver whether a belt had room was asking whether
+   an item happened to be sitting at the back, so it flipped six times a second on a steady
+   line — re-solving the network and rebuilding every belt each time. That is what made the
+   belts blink, and what made items vanish for a frame when a flow briefly hit zero. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- visual stability ---');
+
+  const build = (stallOneBranch) => {
+    api.loadLevel(6);
+    const lv = api.LEVELS[6];
+    const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+    const sp = api.addEntity('splitter', 9, 3, 0);
+    const s1 = api.addEntity('smelter', 14, 2, 1);
+    const s2 = api.addEntity('smelter', 14, 6, 1);
+    const dp = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
+    api.resolve();
+    api.armBelt(1); api.connectByTap(m, sp);
+    api.armBelt(1); api.connectByTap(sp, s1);
+    api.armBelt(1); api.connectByTap(sp, s2);
+    if (!stallOneBranch) { api.armBelt(1); api.connectByTap(s1, dp); }
+    api.armBelt(1); api.connectByTap(s2, dp);
+    api.resolve();
+    return { sp };
+  };
+
+  let t = performance.now();
+  const run = (secs) => { for (let i = 0; i < secs / 0.04; i++) { t += 40; api.frame(t); } };
+
+  const sample = (secs) => {
+    let flips = 0, rebuilds = 0, blanks = 0, vanished = 0;
+    let lastRoom = null, lastFlow = null;
+    for (let i = 0; i < secs / 0.04; i++) {
+      t += 40; api.frame(t);
+      const room = api.links().map((l) => (api.roomy(l) ? '1' : '0')).join('');
+      if (lastRoom !== null && room !== lastRoom) flips++;
+      lastRoom = room;
+      const fs = api.flowSignature();
+      if (lastFlow !== null && fs !== lastFlow) rebuilds++;
+      lastFlow = fs;
+      for (const l of api.links()) if (l.items.length > 0 && !l.item) blanks++;
+      const carried = api.links().reduce((n, l) => n + l.items.length, 0);
+      api.updateItems(api.getClock());
+      const drawn = Object.keys(api.itemMeshes).reduce((n, k) => n + api.itemMeshes[k].count, 0);
+      if (carried > 0 && drawn === 0) vanished++;
+    }
+    return { flips, rebuilds, blanks, vanished };
+  };
+
+  /* a healthy line must be completely still */
+  build(false);
+  run(10);
+  let r = sample(24);
+  ok(r.flips === 0, `a steady line never changes the solver's view of it (${r.flips} flips in 24 s)`);
+  ok(r.rebuilds === 0, `so the belts are never rebuilt (${r.rebuilds})`);
+  ok(r.blanks === 0, `and no belt loses its item tag (${r.blanks})`);
+  ok(r.vanished === 0, `nothing ever vanishes (${r.vanished} frames)`);
+
+  /* and a line with a branch pinned at capacity must settle rather than chatter */
+  build(true);
+  run(40);
+  const outs = api.links().filter((l) => l.from === api.ents().find((e) => e.type === 'splitter').id);
+  const stalled = outs.find((o) => (o.flow || 0) < 1e-6);
+  ok(!!stalled && api.beltBackedUp(stalled),
+    `the stranded branch fills to capacity (${stalled && stalled.items.length}/${stalled && api.beltItemCapacity(stalled)})`);
+  r = sample(32);
+  ok(r.flips <= 2, `a branch sitting at capacity does not chatter (${r.flips} flips in 32 s)`);
+  ok(r.rebuilds <= 2, `so the geometry is barely rebuilt (${r.rebuilds})`);
+  ok(r.blanks === 0, 'cargo keeps its identity even when the rate is zero');
+  ok(r.vanished === 0, 'and never disappears');
+
+  /* the two questions really are different, which is the whole point */
+  const anyBelt = api.links()[0];
+  ok(typeof api.beltHasRoom(anyBelt) === 'boolean' && typeof api.beltBackedUp(anyBelt) === 'boolean',
+    'room-for-one-more and backed-up are separate tests');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 15900);

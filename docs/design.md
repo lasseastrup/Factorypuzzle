@@ -166,6 +166,13 @@ This replaced a model where each belt spawned and drained on its own rate accumu
 
 The rule this suggests generally: **where the simulation says two things are the same event, the presentation must not model them as two.**
 
+**Backpressure is a different question from "does one more item fit".** Both are needed, and confusing them was expensive. Whether an item physically fits at the input right now is a per-item test, used for the immediate decision to spawn or transfer. Whether a belt is *backed up* is what the solver needs, and it must be stable: it was originally the same per-item test, so it flipped whenever an item happened to be sitting at the back — six times a second on a perfectly steady line. Every flip re-solved the network and rebuilt every belt mesh, which is why belts appeared to blink, one brightening as another darkened. Backpressure is now measured against the belt's item capacity, with hysteresis so a belt sitting exactly at capacity does not chatter as its far end consumes, and it is evaluated once per frame rather than during a solve.
+
+Two supporting rules fell out of the same investigation:
+
+- **Do not rebuild what has not changed.** Re-solving is cheap; tearing down and rebuilding every belt mesh is not. The geometry is now rebuilt only when the flows, items or saturation actually differ, which is what turns a harmless re-solve into a no-op instead of a flicker.
+- **Cargo keeps its identity when the rate goes to zero.** A belt's item tag is what the renderer draws from, and the solver blanks it when there is no flow — so everything on a stalled belt vanished for a frame and came back. What is physically on a belt does not stop existing because its rate did.
+
 **Quota is only credited once nothing is still accumulating.** While a belt fills, upstream runs faster than the line can ultimately sustain, so crediting output during that window would let a factory pass on a transient it cannot hold.
 
 From act 2, some recipes emit a secondary output. If a byproduct isn't consumed or sunk, the machine's output blocks and the whole line stalls. This converts the game from "chain builder" to "system balancer" and is where the real difficulty lives. Sinks (incinerators) exist but cost score — the clean solution loops the byproduct back into something useful.

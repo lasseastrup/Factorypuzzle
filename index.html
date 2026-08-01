@@ -2711,11 +2711,32 @@ function advanceBelts(dt) {
   }
 }
 
-/* room at the input end is what decides whether a source can keep pushing */
+/* Whether one more item physically fits at the input right now — the immediate decision
+   for spawning or transferring. */
 function beltHasRoom(l) {
   if (!l.items || !l.items.length) return true;
   return l.items[l.items.length - 1] >= JAM_SPACING;
 }
+
+/* Whether the belt is backed up. A different question, and the one the SOLVER needs.
+   Asking the per-item question instead made this flip whenever an item happened to be at
+   the back — six times a second on a steady line — and every flip re-solved the network and
+   rebuilt every belt, which is what made them blink. */
+const beltItemCapacity = (l) => Math.max(1, Math.floor(l.length / JAM_SPACING));
+
+/* Sticky, with hysteresis, and updated once per frame rather than evaluated during a solve.
+   A belt sitting exactly at capacity oscillates by one item as the far end consumes, and
+   without hysteresis that flipped the solver's view of the network several times a second.
+   It becomes backed up at capacity and only recovers two items later. */
+function updateBackpressure() {
+  for (const l of links) {
+    const cap = beltItemCapacity(l);
+    const n = l.items ? l.items.length : 0;
+    if (l.backedUp) { if (n <= cap - 2) l.backedUp = false; }
+    else if (n >= cap) l.backedUp = true;
+  }
+}
+function beltBackedUp(l) { return !!l.backedUp; }
 /* how much of the belt is standing still, for the inspector */
 function queuedOn(l) {
   if (!l.items || !l.items.length) return 0;
@@ -2765,19 +2786,29 @@ function updateItems(t) {
    makes a half-built line fill from the front instead of sitting dead: each machine
    works until its own output belt is full, then blocks, and the jam walks
    backwards. */
-const roomy = (l) => beltHasRoom(l);
+const roomy = (l) => !beltBackedUp(l);
 
 /* Re-solve because the belts filled up, not because the player changed anything.
    Keeps the schedule and the hold timer intact. */
 let roomSig = '';
+/* Everything the belt geometry is drawn from. Re-solving is cheap; tearing down and
+   rebuilding every belt mesh is not, and doing it for an unchanged result is what turned a
+   re-solve into a visible flicker. */
+function flowSignature() {
+  let s = '';
+  for (const l of links) s += (l.flow || 0).toFixed(3) + ':' + (l.item || '') + ':' + (l.saturated ? 1 : 0) + '|';
+  return s;
+}
+
 function resolveFlow() {
   const keep = links.map((l) => l.startT);
+  const before = flowSignature();
   const root = rootContext();
   result = solveNested({ entities: root.ents, links: root.links }, {}, { roomy });
   applyViewResults(result);
   links.forEach((l, i) => { l.startT = keep[i]; });
-  buildAll();
-  refreshQuotas();
+  keepItemTags();
+  if (flowSignature() !== before) { buildAll(); refreshQuotas(); }
 }
 
 /* The level is always what gets solved, even while the player is inside a factory:
@@ -2814,6 +2845,7 @@ function resolve() {
   const root = rootContext();
   result = solveNested({ entities: root.ents, links: root.links }, {}, { roomy });
   applyViewResults(result);
+  keepItemTags();
   repairInputSlots();
   scheduleSpinUp(prev);
   editT = clockT;
@@ -3656,6 +3688,17 @@ function afterPlace() {
 
 /* Once a belt's contents are known, record the matching slot so the inspector and any
    later port arithmetic agree with what is actually being delivered. */
+/* A belt carrying cargo must not lose its item tag because the solver momentarily gave it
+   no flow: updateItems draws nothing for an untagged belt, so everything on it vanished for
+   a frame and came back. What is physically on a belt does not stop existing because the
+   rate went to zero. */
+function keepItemTags() {
+  for (const l of links) {
+    if (l.item) { l.lastItem = l.item; continue; }
+    if (l.items && l.items.length && l.lastItem) l.item = l.lastItem;
+  }
+}
+
 function repairInputSlots() {
   for (const l of links) {
     const dest = entById(l.to);
@@ -4044,6 +4087,7 @@ function frame(now) {
   /* When a belt fills or drains the flow picture changes, so re-solve — but only on
      the transition, not every frame. */
   advanceBelts(dt);
+  updateBackpressure();
   const sig = links.map((l) => (roomy(l) ? '1' : '0')).join('');
   if (sig !== roomSig) { roomSig = sig; resolveFlow(); }
 
