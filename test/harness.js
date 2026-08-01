@@ -180,7 +180,12 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'isJunction',
   'layBelt',
   'straightRaw',
-  'spliceSpot'];
+  'spliceSpot',
+  'beltAtScreen',
+  'beltPlanePoint',
+  'beltSpeed',
+  'TIER_TEX',
+  'BELTS'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
@@ -2801,3 +2806,85 @@ setTimeout(() => {
   api.exitContext();
   console.log(`\n${p} passed, ${f} failed`);
 }, 18400);
+
+/* --- pointing at a belt, and belt tiers behaving differently --- */
+setTimeout(() => {
+  const THREE2 = require('three');
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- belt picking and tier speed ---');
+
+  api.loadLevel(6);
+  const lv = api.LEVELS[6];
+  api.clearPlot();
+  const m1 = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const s1 = api.addEntity('smelter', 16, 3, 1);
+  const m2 = api.addEntity('miner', lv.nodes[1].x, lv.nodes[1].z, 0);
+  const s2 = api.addEntity('smelter', 16, 7, 1);
+  api.resolve();
+  api.armBelt(1); ok(api.connectByTap(m1, s1), 'an older Mk1 belt is laid');
+  api.armBelt(3); ok(api.connectByTap(m2, s2), 'then a newer Mk3 belt alongside it');
+  api.resolve();
+  const older = api.links()[0], newer = api.links()[1];
+
+  /* the nearest belt must win, not the one created first */
+  const onNewer = newer.path[Math.floor(newer.path.length / 2)];
+  ok(api.beltAt(onNewer) === newer, 'aiming at the newer belt finds the newer belt');
+  const onOlder = older.path[Math.floor(older.path.length / 2)];
+  ok(api.beltAt(onOlder) === older, 'and aiming at the older one finds the older one');
+
+  /* and the screen ray must be corrected for the belt standing above the ground */
+  const project = (pt) => {
+    const v = new THREE2.Vector3(pt.x, api.BELT_Y, pt.z).project(api.camera);
+    return { x: (v.x * 0.5 + 0.5) * 390, y: (-v.y * 0.5 + 0.5) * 844 };
+  };
+  const sc = project(onNewer);
+  const ground = api.groundAt(sc.x, sc.y);
+  const plane = api.beltPlanePoint(sc.x, sc.y);
+  const dGround = Math.hypot(ground.x - onNewer.x, ground.z - onNewer.z);
+  const dPlane = Math.hypot(plane.x - onNewer.x, plane.z - onNewer.z);
+  ok(dGround > 0.15, `the raw ground point misses the belt by ${dGround.toFixed(2)} m`);
+  ok(dPlane < 0.08, `compensating for belt height lands on it (${dPlane.toFixed(2)} m)`);
+  ok(api.beltAtScreen(sc.x, sc.y) === newer, 'so a press aimed at a belt hits that belt');
+
+  /* tiers must differ in speed, not only in capacity */
+  const sp = [1, 2, 3].map((t) => api.beltSpeed({ tier: t }));
+  ok(sp[0] < sp[1] && sp[1] < sp[2], `each tier is faster than the last (${sp.join(' / ')} m/s)`);
+  const caps = api.BELTS.map((t) => t.cap);
+  ok(caps[0] < caps[1] && caps[1] < caps[2], `and carries more (${caps.join(' / ')}/min)`);
+
+  /* measured, not just declared: items really do move faster on the faster belt */
+  let t = performance.now();
+  const run = (secs) => { for (let i = 0; i < secs / 0.04; i++) { t += 40; api.frame(t); } };
+  /* Sample the LEADING item, early in its run. The rearmost item sits where it spawns and
+     barely moves, and a first attempt at this measured that and read zero on both belts. */
+  run(2.5);
+  const lead = (l) => (l.items.length && l.items[0] < l.length - 1 ? l.items[0] : null);
+  const before = [lead(older), lead(newer)];
+  run(0.6);
+  const after = [lead(older), lead(newer)];
+  if (before[0] != null && before[1] != null && after[0] != null && after[1] != null) {
+    const advOld = after[0] - before[0], advNew = after[1] - before[1];
+    ok(advOld > 0.1 && advNew > advOld * 1.4,
+      `the leading item covers more ground on Mk3 than Mk1 (${advNew.toFixed(2)} m vs ${advOld.toFixed(2)} m in 0.6 s)`);
+  } else {
+    ok(false, `sampling missed the leading items (${JSON.stringify(before)} -> ${JSON.stringify(after)})`);
+  }
+
+  /* the cleats have to scroll at the speed of the belt carrying them, which needs one
+     mesh per tier: a single shared mesh can only scroll at one rate */
+  let beltMeshes = 0;
+  const maps = new Set();
+  api.gBelts.traverse((o) => {
+    if (o.isMesh && !o.isInstancedMesh && o.material.map) { beltMeshes++; maps.add(o.material.map.uuid); }
+  });
+  ok(beltMeshes === 2, `one surface mesh per tier in use (${beltMeshes} for 2 tiers)`);
+  ok(maps.size === 2, `each with its own scrolling texture (${maps.size})`);
+  api.frame(t + 40);
+  const offs = api.BELTS.map((tier) => api.TIER_TEX[tier.id].offset.x);
+  ok(new Set(offs.map((v) => v.toFixed(4))).size === 3,
+    `and the three tiers scroll at three different rates (${offs.map((v) => v.toFixed(2)).join(' / ')})`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 18900);

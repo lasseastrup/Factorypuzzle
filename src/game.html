@@ -324,7 +324,8 @@ const STATE_COLOR = {
    set to. Lowering it does not lie about throughput — it just spaces items closer
    together and moves them slower, which is what makes 30/min legible as a pulse
    every two seconds instead of a single object flashing past. */
-const BELT_SPEED = 1.9;        // m/s
+const BELT_SPEED = 1.9;        // m/s — the reference speed, used where no belt is in hand
+const beltSpeed = (l) => (BELTS.find((t) => t.id === (l && l.tier)) || BELTS[0]).speed;
 const BELT_HW = 0.15;          // half width of the moving surface
 const RAIL_HW = 0.035;         // side rails are strips, not more belt
 const BELT_TEX_PERIOD = 0.38;  // metres per cleat
@@ -1023,9 +1024,37 @@ function entAt(p) {
   for (const e of ents) if (inBox(p, boxOf(e, 0.1))) return e;
   return null;
 }
-function beltAt(p) {
-  for (const l of links) if (distToPath(p, l.path) < BELT_HW + 0.18) return l;
-  return null;
+/* The NEAREST belt, not the first one that happens to be within reach. Returning the first
+   meant iteration order decided it, and iteration order is creation order — so aiming at a
+   belt could connect to an older one running alongside. That is the reported bug: dragging to
+   the ore trunk spliced the ingot belt next to it instead. */
+function beltAt(p, ignore) {
+  let best = null, bd = BELT_HW + 0.18;
+  for (const l of links) {
+    if (l === ignore || !l.path || l.path.length < 2) continue;
+    const d = distToPath(p, l.path);
+    if (d < bd) { bd = d; best = l; }
+  }
+  return best;
+}
+
+/* Belts stand 0.34 m up, so the ground point under a screen pixel aimed at one sits a little
+   BEYOND it — about 0.25 m at this camera pitch, which is most of the hit tolerance. Aiming
+   at a belt therefore landed closer to whatever was behind it. Shift back toward the camera
+   before testing. */
+function beltPlanePoint(cx, cy) {
+  const g = groundAt(cx, cy);
+  if (!g) return null;
+  const back = BELT_Y / Math.tan(pitch);
+  const dir = new THREE.Vector3().subVectors(camera.position, camCenter).setY(0);
+  if (dir.lengthSq() < 1e-9) return g;
+  dir.normalize();
+  return { x: g.x + dir.x * back, z: g.z + dir.z * back };
+}
+
+function beltAtScreen(cx, cy, ignore) {
+  const p = beltPlanePoint(cx, cy);
+  return p ? beltAt(p, ignore) : null;
 }
 
 /* ============================================================
@@ -1499,7 +1528,7 @@ function straightRaw(a, b) {
   return out;
 }
 
-function commitStroke(raw, endPoint, pickedEnd) {
+function commitStroke(raw, endPoint, pickedEnd, beltPoint) {
   /* started on a belt: splice a junction, and the drawn shape becomes the new branch */
   if (stroke.fromBelt) {
     const target = pickedEnd || entAt(endPoint);
@@ -1523,9 +1552,11 @@ function commitStroke(raw, endPoint, pickedEnd) {
   if (!b) {
     /* released over a belt: splice a junction into it and feed it from here. The reverse of
        branching, and the same operation — the junction sorts out which way each belt runs. */
-    const onto = beltAt(endPoint);
+    /* Tested at the belt's own height, and against the nearest belt rather than the first */
+    const aim = beltPoint || endPoint;
+    const onto = beltAt(aim);
     if (onto && onto.from !== a.id && onto.to !== a.id) {
-      spliceJunction(onto, endPoint, a, raw);
+      spliceJunction(onto, aim, a, raw);
       return;
     }
     return toast('End the stroke on a machine, or on another belt.');
@@ -1930,11 +1961,19 @@ function beltTexture() {
   return t;
 }
 const BELT_TEX = beltTexture();
+/* One texture per tier: the cleats have to scroll at the speed of the belt carrying them,
+   and a single shared mesh can only scroll at one rate. */
+const TIER_TEX = {};
+for (const t of BELTS) {
+  const tex = beltTexture();
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  TIER_TEX[t.id] = tex;
+}
 /* A fresh material per rebuild: clear() disposes the materials of the children it
    removes, so a shared one would be destroyed the first time a belt is edited.
    The texture is shared and survives, which is what the scroll animation needs. */
-const newBeltMat = () => new THREE.MeshLambertMaterial({
-  vertexColors: true, map: BELT_TEX, side: THREE.DoubleSide });
+const newBeltMat = (tierId) => new THREE.MeshLambertMaterial({
+  vertexColors: true, map: TIER_TEX[tierId] || BELT_TEX, side: THREE.DoubleSide });
 
 function ribbon(list, colorFor, withUV, halfWidth) {
   const pos = [], col = [], idx = [], nrm = [], uv = [];
@@ -1979,19 +2018,20 @@ function buildBelts() {
   clear(gBelts);
   if (!links.length) return;
 
-  const surface = ribbon(links, (l, c) => {
+  const tint = (l, c) => {
     const tier = BELTS.find((t) => t.id === l.tier) || BELTS[0];
     c.setHex(tier.color);
     const load = Math.min(1, (l.flow || 0) / l.cap);
     c.lerp(new THREE.Color(0xffffff), 0.02 + load * 0.34);
     if (l.saturated && l.overCapacity) c.setHex(0xc2402f);
-  });
-  if (surface) {
-    const m = new THREE.Mesh(surface, newBeltMat());
-    /* A belt is a raised structure, so it throws a shadow like one. It only received
-       before, which left runs looking painted onto the floor rather than standing over
-       it. shadowSide is set explicitly because the ribbon is a zero-thickness
-       double-sided sheet, and three.js would otherwise pick a side by guesswork. */
+  };
+  /* grouped by tier so each group's cleats can move at that tier's speed */
+  for (const t of BELTS) {
+    const group = links.filter((l) => (l.tier || 1) === t.id);
+    if (!group.length) continue;
+    const geo = ribbon(group, tint);
+    if (!geo) continue;
+    const m = new THREE.Mesh(geo, newBeltMat(t.id));
     m.castShadow = true;
     m.receiveShadow = true;
     m.material.shadowSide = THREE.DoubleSide;
@@ -2204,10 +2244,10 @@ function advanceBelts(dt) {
 
   /* advance every item, never overtaking the one ahead */
   for (const l of links) {
-    const items = l.items, len = l.length;
+    const items = l.items, len = l.length, spd = beltSpeed(l);
     for (let i = 0; i < items.length; i++) {
       const limit = i === 0 ? len : items[i - 1] - JAM_SPACING;
-      items[i] = Math.min(items[i] + BELT_SPEED * dt, limit);
+      items[i] = Math.min(items[i] + spd * dt, limit);
       if (items[i] < 0) items[i] = 0;
     }
   }
@@ -2405,7 +2445,7 @@ function resolve() {
   spinUp = 0;
   for (const l of links) {
     if (!isFinite(l.startT) || (l.flow || 0) <= 1e-4) continue;
-    spinUp = Math.max(spinUp, l.startT + l.length / BELT_SPEED - clockT);
+    spinUp = Math.max(spinUp, l.startT + l.length / beltSpeed(l) - clockT);
   }
   deliveries = [];           /* the line must run undisturbed to count */
   buildAll();
@@ -2432,7 +2472,7 @@ function scheduleSpinUp(prev) {
       let ready = 0;
       for (const l of ins) {
         if (l.startT === Infinity) { ready = Infinity; break; }
-        ready = Math.max(ready, l.startT + l.length / BELT_SPEED);
+        ready = Math.max(ready, l.startT + l.length / beltSpeed(l));
       }
       const t = ready === Infinity ? Infinity : ready + 0.18;
       if (t < e.startT - 1e-6) { e.startT = t; changed = true; }
@@ -2440,7 +2480,7 @@ function scheduleSpinUp(prev) {
   }
   spinUp = 0;
   for (const e of ents) if (isFinite(e.startT) && (e.f || 0) > 1e-4) spinUp = Math.max(spinUp, e.startT);
-  for (const l of links) if (isFinite(l.startT) && (l.flow || 0) > 1e-4) spinUp = Math.max(spinUp, l.startT + l.length / BELT_SPEED);
+  for (const l of links) if (isFinite(l.startT) && (l.flow || 0) > 1e-4) spinUp = Math.max(spinUp, l.startT + l.length / beltSpeed(l));
   spinUp += 0.35;
 
   /* Shift the schedule onto the running clock.
@@ -3081,7 +3121,7 @@ cv.addEventListener('pointerdown', (ev) => {
   /* A drag that starts on a BELT branches it. Checked after machines, so a belt passing
      under a machine's footprint does not steal the gesture. */
   if (g && !machineAtScreen(ev.clientX, ev.clientY) && !entAt(g)) {
-    const onBelt = beltAt(g);
+    const onBelt = beltAtScreen(ev.clientX, ev.clientY);
     if (onBelt) {
       stroke = { fromBelt: onBelt, at: { x: g.x, z: g.z }, fromEnt: null, fromPort: 0, pts: [] };
       dragMode = 'paint';
@@ -3177,7 +3217,10 @@ cv.addEventListener('pointerup', (ev) => {
       rebaseGesture();
       return;
     }
-    if (stroke.pts.length >= 1 && g) commitStroke(stroke.pts, g, machineAtScreen(ev.clientX, ev.clientY));
+    if (stroke.pts.length >= 1 && g) {
+      commitStroke(stroke.pts, g, machineAtScreen(ev.clientX, ev.clientY),
+        beltPlanePoint(ev.clientX, ev.clientY));
+    }
     else toast('Drag from a machine to another machine to lay a belt.');
     stroke = null;
     if (!pointers.size) { dragMode = null; pinched = false; }
@@ -3849,6 +3892,7 @@ function frame(now) {
   /* The surface must scroll at exactly the speed items travel, or the belt looks
      like it is slipping under its own cargo. One period of texture is
      BELT_TEX_PERIOD metres, so offset advances BELT_SPEED / period per second. */
+  for (const t of BELTS) TIER_TEX[t.id].offset.x = -(clockT * t.speed) / BELT_TEX_PERIOD;
   BELT_TEX.offset.x = -(clockT * BELT_SPEED) / BELT_TEX_PERIOD;
   animateMachines(clockT);
   updateItems(clockT);

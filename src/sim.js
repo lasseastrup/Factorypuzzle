@@ -53,10 +53,14 @@ const MACHINES = {
   sink:     { name: 'Depot',    w: 2, h: 2, kind: 'sink',     cost: 0, recipes: [] },
 };
 
+/* A tier is faster AND denser. Speed alone would leave every tier looking identical at
+   partial load; density alone left them looking identical full stop, which is what happened
+   when they shared one speed — the only difference between a Mk1 and a Mk3 was how close
+   together the items sat, and at low flow that is no difference at all. */
 const BELTS = [
-  { id: 1, name: 'Mk1', cap: 60,  color: 0x6b7a8f },
-  { id: 2, name: 'Mk2', cap: 120, color: 0x4c8fb5 },
-  { id: 3, name: 'Mk3', cap: 240, color: 0xb5904c },
+  { id: 1, name: 'Mk1', cap: 60,  speed: 1.4, color: 0x6b7a8f },
+  { id: 2, name: 'Mk2', cap: 120, speed: 2.1, color: 0x4c8fb5 },
+  { id: 3, name: 'Mk3', cap: 240, speed: 2.9, color: 0xb5904c },
 ];
 
 const EPS = 1e-7;
