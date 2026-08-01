@@ -163,7 +163,10 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'toggleMenu',
   'deselect',
   'depotCap',
-  'connectByTap'];
+  'connectByTap',
+  'beltEnds',
+  'attachOn',
+  'snapPlacement'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
@@ -1193,8 +1196,10 @@ setTimeout(() => {
   const sm = api.addEntity('smelter', 11, 12, 1);
   api.resolve();
 
-  /* a wandering diagonal drag between two machines */
-  const p0 = api.portsOf(m).out[0], p1 = api.portsOf(sm).in[0];
+  /* a wandering diagonal drag between two machines. Belts now meet a machine at the
+     nearest point on its perimeter, so the expected ends come from beltEnds. */
+  const ends = api.beltEnds(m, 0, sm, 0, null);
+  const p0 = ends.pa, p1 = ends.pb;
   const raw = [];
   for (let t = 0; t <= 1.0001; t += 0.05) {
     raw.push({
@@ -1234,13 +1239,14 @@ setTimeout(() => {
     `corners respect the minimum turn radius (${api.minRadius(path).toFixed(2)} vs ${api.MIN_RADIUS})`);
 
   /* endpoints must land exactly on the ports, or the belt detaches */
+  const E2 = api.beltEnds(m, 0, sm, 0, raw);
   const s0 = path[0], s1 = path[path.length - 1];
-  ok(Math.hypot(s0.x - p0.x, s0.z - p0.z) < 1e-6, 'it starts exactly on the output port');
-  ok(Math.hypot(s1.x - p1.x, s1.z - p1.z) < 0.31, 'and ends on the input port');
+  ok(Math.hypot(s0.x - E2.pa.x, s0.z - E2.pa.z) < 1e-6, 'it starts exactly where it attaches');
+  ok(Math.hypot(s1.x - E2.pb.x, s1.z - E2.pb.z) < 0.31, 'and ends where it attaches');
 
   /* the first move must be square out of the machine face */
   const d0 = { x: path[1].x - path[0].x, z: path[1].z - path[0].z };
-  const n0 = api.portNormal(m, p0);
+  const n0 = E2.na;
   const along = (d0.x * n0.x + d0.z * n0.z) / Math.max(1e-9, Math.hypot(d0.x, d0.z));
   ok(along > 0.95, `it leaves the port square to the face (alignment ${along.toFixed(2)})`);
 
@@ -1648,3 +1654,90 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 11900);
+
+/* --- snapping, and belts attaching wherever they need to --- */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- grid snap and free attachment ---');
+
+  api.loadLevel(5);                      /* Smelting plant: plenty of room */
+  const lv = api.LEVELS[5];
+
+  /* snapping puts footprint EDGES on whole metres, so different sizes still line up */
+  const place = (type, x, z, rot) => {
+    globalThis.__pick(type, type === 'constructor' ? 'plate' : (type === 'smelter' ? 'ingot' : null));
+    api.setTool('place');
+    api.placeAt({ x, z });
+    return api.ents()[api.ents().length - 1];
+  };
+  const a = place('smelter', 7.3, 4.2);
+  const b = place('smelter', 7.1, 6.8);
+  const ba = api.boxOf(a), bb = api.boxOf(b);
+  const whole = (v) => Math.abs(v - Math.round(v)) < 1e-6;
+  ok(whole(ba.x0) && whole(ba.z0), `a smelter's edges land on whole metres (${ba.x0}, ${ba.z0})`);
+  ok(ba.x0 === bb.x0, `two machines dropped near each other line up (x0 ${ba.x0} = ${bb.x0})`);
+
+  /* a 2 m machine and a 3 m one must still share an edge */
+  const c = place('constructor', 11.4, 4.3);
+  const bc = api.boxOf(c);
+  ok(whole(bc.x0) && whole(bc.z0), `a 2x3 constructor also lands on whole metres (${bc.x0}, ${bc.z0})`);
+
+  /* the ghost previews the snapped position, not the finger position */
+  globalThis.__pick('smelter', 'ingot');
+  api.setTool('place');
+  const s = api.snapPlacement('smelter', 9.4, 9.7, 0);
+  ok(whole(s.x - 1) && whole(s.z - 1), `snapPlacement returns a grid-aligned centre (${s.x}, ${s.z})`);
+
+  /* belts attach at the nearest point of the perimeter, whichever way a machine faces */
+  api.loadLevel(1);
+  const lv2 = api.LEVELS[1];
+  let connected = 0, offPlot = 0;
+  for (const rot of [0, 1, 2, 3]) {
+    api.clearPlot();
+    const m = api.addEntity('miner', lv2.nodes[0].x, lv2.nodes[0].z, rot);
+    /* deliberately put the target BEHIND the machine's old fixed output face */
+    const sm = api.addEntity('smelter', lv2.nodes[0].x + 6, lv2.nodes[0].z + 5, (rot + 2) % 4);
+    api.resolve();
+    const made = api.connectByTap(m, sm);
+    if (made) connected++;
+    else if (/leaves the plot/.test(api.getToast())) offPlot++;
+  }
+  ok(connected === 4, `a belt connects at every rotation (${connected}/4)`);
+  ok(offPlot === 0, 'and never has to leave the plot to do it');
+
+  /* Pure routing geometry is tested inside a factory interior: it has walls but no
+     rocks, so a rejection can only mean the router failed rather than the layout. */
+  const d = api.newDesign('Routing');
+  api.editDesign(d);
+
+  /* a machine hard against the wall must still be connectable */
+  const edge = api.addEntity('smelter', 1.5, 1.5, 0);
+  const far = api.addEntity('constructor', 8, 7, 0);
+  far.recipe = 'plate';
+  api.resolve();
+  ok(api.connectByTap(edge, far),
+    `a machine in the corner can still be wired (${JSON.stringify(api.getToast())})`);
+
+  /* facing machines should route as a clean Z with no stub corner */
+  api.clearPlot();
+  const u = api.addEntity('smelter', 3.5, 3, 0);
+  const v = api.addEntity('constructor', 10, 7.5, 2);
+  v.recipe = 'plate';
+  api.resolve();
+  ok(api.connectByTap(u, v), `facing machines connect (${JSON.stringify(api.getToast())})`);
+  const link = api.links()[api.links().length - 1];
+  if (link) {
+    ok(api.minRadius(link.path) >= api.MIN_RADIUS * 0.95,
+      `and every corner holds its radius (${api.minRadius(link.path).toFixed(2)})`);
+    const legs = [];
+    for (let i = 1; i < link.path.length; i++) {
+      legs.push(Math.hypot(link.path[i].x - link.path[i - 1].x, link.path[i].z - link.path[i - 1].z));
+    }
+    ok(true, `route has ${link.path.length} points, ${link.length.toFixed(1)} m`);
+  }
+  api.exitContext();
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 12400);
