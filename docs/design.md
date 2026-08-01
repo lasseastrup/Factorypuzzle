@@ -1,6 +1,8 @@
-# RATIO — Game Design Document (v0.6)
+# RATIO — Game Design Document (v0.7)
 
 *Working title. Alternatives: Throughput, Feedstock, Assembly Line, Per Minute.*
+
+**v0.7:** factories are player-built boxes that can be entered, nested and instanced from a shared design (§7).
 
 **v0.6:** the factory runs continuously — no play button, no waiting state; the depot counts what it actually receives (§5.1).
 
@@ -188,48 +190,45 @@ Ore types for v1: Iron, Copper, Limestone, Coal. Enough for a real tech chain, f
 
 ---
 
-## 7. The Module system (the hook)
+## 7. Factories inside factories (the hook)
 
-This is the most distinctive mechanic and the one that needs the most careful handling.
+This is the most distinctive mechanic and the one that needs the most careful handling. It replaces an earlier design in which each completed *level* became a reusable module.
 
-### 7.1 How it works
+### 7.1 What a factory is
 
-On completing a level, the player's solution is **encapsulated** into a Module: a single placeable object with N input ports and M output ports, and a fixed rate derived from *their actual build*. The Reinforced Plate module above becomes:
+A **Factory** is a box the player places like any other machine. It has input and output ports on the outside, and an interior that the player builds by **entering** it. Inside is a plot like any other, except that instead of ore nodes and a depot there are **terminals**: one for each of the box's ports. Wire the input terminals through machines to the output terminals and the box does something.
 
-```
-┌─────────────────────┐
-│  REINFORCED PLATE   │
-│  ◄ 60 iron ore/min  │
-│  ► 10 plate/min     │
-│  cost: 8  size: 4×4 │
-└─────────────────────┘
-```
+Machines can still be built freely outside a box. A factory is an organising tool, not a requirement.
 
-Placed in a later level, it consumes 60 ore/min and emits 10 reinforced plates/min. The player never rebuilds it.
+### 7.2 The interface grows by use
 
-### 7.2 Efficiency is inherited
+A box always shows **one spare input port and one spare output port**. Attaching a belt to a spare consumes it, a fresh spare appears, and a matching terminal appears inside to wire up.
 
-If the player's solution was wasteful — 12 machines instead of 8, ore going to an incinerator — the Module carries that. It costs more score, takes more space, and eats more ore in every future level. This creates the game's long-term meta: **go back and optimise old levels to make new levels easier.** That retroactive loop is the strongest thing in this design and should be protected.
+This is worth spelling out because it interacts with sharing. Ports are created by attaching belts *outside*, which makes them feel like a property of the instance — but the interior is shared between instances, and an interior wired to a fixed set of terminals cannot serve one instance with two inputs and another with one. So **attaching a belt adds the terminal to the definition**: every instance gains that port, unconnected on the others, and the interior gains one terminal to wire. The interface grows by use, as intended, but it lives where the shared interior can see it.
 
-### 7.3 The risk, and the mitigation
+### 7.3 Instances share one design
 
-The risk is a progression brick: a player with a bad act-1 module hits act-3 and simply cannot fit or feed it, with the fix buried five hours behind them. Mitigations, in order of preference:
+Placing the same factory twice creates two **instances of one definition**. Enter either one, change anything, and every instance changes with it. That is the point: a factory is a subroutine, and improving it improves every use at once.
 
-1. **Stock modules.** Every completed level also grants an "Industry Standard" version at par cost. Your own module is only offered when it beats par. So a bad solution never makes you worse off than a neutral player — it just means you left value on the table. *(Recommended.)*
-2. Level quotas are sized against par, with generous headroom.
-3. A "refactor" screen that lets you re-enter and re-solve any past level directly from the module picker, without leaving the current level.
+An instance can be **unlinked**, which forks it a private copy of the definition. Necessary escape hatch — sometimes you want *nearly* the same thing — but the linked case is the interesting one and should be the default.
 
-### 7.4 Modules stay black boxes
+Instances are independent at *solve* time even though they share a design. Three copies fed 30, 15 and 0 ore per minute run at 100%, 50% and 0%. Shared design, individual behaviour.
 
-**Confirmed:** placing a module does *not* unpack its machines into the current level. It is an abstract rectangle. This is what keeps late levels tractable on a phone screen — otherwise level 40 is 400 machines and unplayable.
+### 7.4 Nesting
 
-**Footprint rule:** a module occupies roughly `2 × machineCount` tiles (machines plus an allowance for the internal belts you'd otherwise have had to route), snapped to the nearest shape from a fixed set: 3×3, 4×4, 4×6, 6×6, 6×8, 8×8, 8×12. The 8-machine Reinforced Plate module lands on 4×4. Ports sit on the box edges; the player picks the edge at placement time by rotating.
+A factory may contain other factories, to any reasonable depth. A factory may **not** contain itself, directly or transitively; that is refused rather than allowed to hang.
 
-**Why this now matters more than it did in v0.1.** With the planner overlay assisting arithmetic (§5.5), space is the primary difficulty axis — and module footprint is where a wasteful past solution bites you. A 12-machine Reinforced Plate build isn't just 4 points of extra score, it's a 6×6 box instead of a 4×4, which on a tight act-3 plot may simply not fit. The efficiency-inheritance mechanic and the difficulty model reinforce each other cleanly. This makes the "revisit and re-optimise old levels" loop load-bearing rather than optional flavour, and it should be surfaced explicitly in UI: when a module won't fit, the game should say *why*, and offer the refactor route (§7.3).
+### 7.5 How it is simulated
 
-Escape hatch: **Inspect** on a module opens a read-only view of the build inside, which is also a natural place for sharing solutions socially.
+An instance is **replaced by a copy of its definition** before solving, recursively. Terminals are plain passthroughs, so a belt aimed at input port 2 becomes a belt aimed at that copy's terminal and the interior carries on — no rewiring required.
 
----
+The consequence worth noting: the solver needs **no concept of hierarchy at all**. It solves one flat graph, exactly as before, which is why the two-pass flow model, the bottleneck attribution and the backpressure rules all keep working through nested factories for free. Results are copied back onto the objects the player actually placed, and an instance reports the worst state of anything inside it, so a box turns amber when something deep within it is starved.
+
+### 7.6 Open risks
+
+- **Legibility.** A box that reports "starved" tells you to go looking. Whether that is a satisfying investigation or a chore is the thing to playtest.
+- **Editing at a distance.** Changing a definition changes factories the player may have forgotten they built. There is no undo yet, and there probably needs to be.
+- **Scoring.** Machines and ore inside a factory count towards the level's totals, so a factory is organisational rather than free. Whether footprint should count the box or its contents is unresolved.
 
 ## 8. Level design & progression
 

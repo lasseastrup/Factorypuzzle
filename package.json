@@ -5,9 +5,10 @@
   "description": "RATIO - a gridless factory-ratio puzzle prototype, top-down 3D for mobile",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node test/sim.test.js && node test/levels.test.js && node test/harness.js",
+    "test": "node test/sim.test.js && node test/levels.test.js && node test/factory.test.js && node test/harness.js",
     "test:sim": "node test/sim.test.js",
     "test:levels": "node test/levels.test.js",
+    "test:factory": "node test/factory.test.js",
     "test:runtime": "node test/harness.js"
   },
   "devDependencies": { "three": "0.128.0" }
