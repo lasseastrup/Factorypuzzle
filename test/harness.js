@@ -1946,3 +1946,74 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 13900);
+
+/* --- nothing may surface through the belt, and the belt must cast a shadow ---
+   The support posts once ran all the way to the belt plane, so their top faces were
+   coplanar with the ribbon and z-fought through it as dark squares along the centreline.
+   Fixing that moved the same fault to the cross-beam, and measuring properly then showed
+   the end drums floating clear above the run. All three are geometry, so all three can be
+   asserted rather than eyeballed. */
+setTimeout(() => {
+  const THREE2 = require('three');
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- belt structure geometry ---');
+
+  api.loadLevel(1);
+  const lv = api.LEVELS[1];
+  const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const sm = api.addEntity('smelter', 12, 3.5, 1);
+  api.resolve();
+  ok(api.connectByTap(m, sm), 'a run is laid');
+  api.resolve();
+
+  /* transformed bounds, so a rotated part is measured where it actually is */
+  const mx = new THREE2.Matrix4();
+  const parts = [];
+  api.gBelts.traverse((o) => {
+    if (!o.isMesh) return;
+    o.geometry.computeBoundingBox();
+    const bb = o.geometry.boundingBox;
+    const corners = [];
+    for (const x of [bb.min.x, bb.max.x]) for (const y of [bb.min.y, bb.max.y]) for (const z of [bb.min.z, bb.max.z]) {
+      corners.push(new THREE2.Vector3(x, y, z));
+    }
+    let top = -Infinity, bottom = Infinity;
+    const n = o.isInstancedMesh ? o.count : 1;
+    for (let i = 0; i < n; i++) {
+      if (o.isInstancedMesh) o.getMatrixAt(i, mx); else mx.copy(o.matrix);
+      for (const c of corners) {
+        const v = c.clone().applyMatrix4(mx);
+        if (v.y > top) top = v.y;
+        if (v.y < bottom) bottom = v.y;
+      }
+    }
+    parts.push({ o, kind: o.geometry.type, instanced: !!o.isInstancedMesh, n, top, bottom });
+  });
+
+  const surface = parts.find((q) => !q.instanced && Math.abs(q.top - api.BELT_Y) < 1e-6);
+  ok(!!surface, `the belt surface sits at ${api.BELT_Y} m`);
+  ok(!!surface && surface.o.castShadow, 'and casts a shadow');
+  ok(!!surface && surface.o.receiveShadow, 'as well as receiving one');
+  ok(!!surface && surface.o.material.shadowSide === THREE2.DoubleSide,
+    'with shadowSide set, since the ribbon has no thickness');
+
+  /* every structural part must stay under the ribbon. Rails are the one exception: they
+     stand above the surface on purpose, to keep cargo on the belt. */
+  const structural = parts.filter((q) => q.instanced);
+  ok(structural.length === 3, `posts, beams and drums are all present (${structural.length} instanced parts)`);
+  const poking = structural.filter((q) => q.top > api.BELT_Y - 0.002);
+  ok(poking.length === 0,
+    poking.length ? `parts reaching the ribbon: ${poking.map((q) => q.kind + ' @' + q.top.toFixed(3)).join(', ')}`
+                  : 'no support reaches the ribbon plane, so none can show through it');
+  for (const q of structural) {
+    ok(q.top < api.BELT_Y, `  ${q.kind} x${q.n} tops out at ${q.top.toFixed(3)} (below ${api.BELT_Y})`);
+  }
+
+  /* posts must actually reach the floor, or the belt looks hung from nothing */
+  const posts = structural.filter((q) => q.kind === 'BoxGeometry').sort((a, b) => a.bottom - b.bottom)[0];
+  ok(posts.bottom < 0.02, `the posts stand on the ground (bottom ${posts.bottom.toFixed(3)})`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 14400);

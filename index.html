@@ -2444,7 +2444,13 @@ function buildBelts() {
   });
   if (surface) {
     const m = new THREE.Mesh(surface, newBeltMat());
+    /* A belt is a raised structure, so it throws a shadow like one. It only received
+       before, which left runs looking painted onto the floor rather than standing over
+       it. shadowSide is set explicitly because the ribbon is a zero-thickness
+       double-sided sheet, and three.js would otherwise pick a side by guesswork. */
+    m.castShadow = true;
     m.receiveShadow = true;
+    m.material.shadowSide = THREE.DoubleSide;
     gBelts.add(m);
   }
 
@@ -2484,45 +2490,73 @@ function buildBelts() {
   }
   /* Rollers at each end. A conveyor terminates in a drum, and putting one there is the
      detail that stops a belt looking like a painted stripe with rails glued on. */
+  const ROLL_R = 0.06;
   const rollers = [];
   for (const l of links) {
     if (!l.path || l.path.length < 2) continue;
     for (const [s, i] of [[0.06, 1], [l.length - 0.06, l.path.length - 2]]) {
       const p = posAt(l, Math.max(0, Math.min(l.length, s)));
       const q = l.path[Math.max(0, Math.min(l.path.length - 1, i))];
-      rollers.push({ p, head: Math.atan2(q.x - p.x, q.z - p.z) });
+      /* posAt reports where an ITEM rides, which is 0.13 above the belt. Using it
+         directly floated the drums well clear of the run; the drum belongs just under
+         the surface, with a hair of clearance so no face is coplanar with the ribbon. */
+      const surf = p.y - 0.13;
+      rollers.push({ x: p.x, y: surf - ROLL_R - 0.005, z: p.z, head: Math.atan2(q.x - p.x, q.z - p.z) });
     }
   }
   if (rollers.length) {
-    const rm = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.085, 0.085, BELT_HW * 2 + 0.05, 10),
+    const rm = new THREE.InstancedMesh(new THREE.CylinderGeometry(ROLL_R, ROLL_R, BELT_HW * 2 + 0.06, 10),
       MET(0x767c82), rollers.length);
     const mx = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
     rollers.forEach((r, i) => {
       e.set(0, r.head, Math.PI / 2, 'YZX');
       q.setFromEuler(e);
-      mx.compose(new THREE.Vector3(r.p.x, r.p.y - 0.02, r.p.z), q, new THREE.Vector3(1, 1, 1));
+      mx.compose(new THREE.Vector3(r.x, r.y, r.z), q, new THREE.Vector3(1, 1, 1));
       rm.setMatrixAt(i, mx);
     });
     rm.castShadow = true;
     gBelts.add(rm);
   }
 
-  if (legs.length) {
-    const lm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1, 1, 0.1),
-      MET(0x555b60), legs.length);
+  /* A trestle is a post plus the cross-member the belt rests on. The post used to run
+     all the way to the belt plane, so its top face was coplanar with the ribbon and
+     z-fought through it — the dark squares along the centreline. It now stops short and
+     the beam fills the gap, which is what a real support looks like anyway. */
+  const BEAM_T = 0.07;
+  const CLEAR = 0.015;          /* keep every face off the ribbon plane */
+  const posts = [], beams = [];
+  for (const { l, s } of legs) {
+    const p = posAt(l, s);
+    const surf = p.y - 0.13;
+    if (surf < 0.16) continue;
+    const q2 = posAt(l, Math.min(l.length, s + 0.25));
+    const beamTop = surf - CLEAR;
+    posts.push({ x: p.x, z: p.z, h: beamTop - BEAM_T });
+    beams.push({ x: p.x, y: beamTop - BEAM_T / 2, z: p.z, head: Math.atan2(q2.x - p.x, q2.z - p.z) });
+  }
+  if (posts.length) {
+    const pm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1, 1, 0.1), MET(0x555b60), posts.length);
     const mx = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3();
-    let n = 0;
-    legs.forEach(({ l, s }) => {
-      const p = posAt(l, s);
-      const top = p.y - 0.13;                  /* the belt surface at this point */
-      if (top < 0.1) return;                   /* nothing to support */
-      v.set(p.x, top / 2, p.z);
-      mx.compose(v, q, new THREE.Vector3(1, top, 1));
-      lm.setMatrixAt(n++, mx);
+    posts.forEach((o, i) => {
+      v.set(o.x, o.h / 2, o.z);
+      mx.compose(v, q, new THREE.Vector3(1, o.h, 1));
+      pm.setMatrixAt(i, mx);
     });
-    lm.count = n;
-    lm.castShadow = true;
-    if (n) gBelts.add(lm);
+    pm.castShadow = true;
+    gBelts.add(pm);
+
+    const bm = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(BELT_HW * 2 + 0.12, BEAM_T, 0.12), MET(0x4d5358), beams.length);
+    const e = new THREE.Euler();
+    beams.forEach((o, i) => {
+      e.set(0, o.head, 0, 'YXZ');
+      q.setFromEuler(e);
+      v.set(o.x, o.y, o.z);
+      mx.compose(v, q, new THREE.Vector3(1, 1, 1));
+      bm.setMatrixAt(i, mx);
+    });
+    bm.castShadow = true;
+    gBelts.add(bm);
   }
 }
 
