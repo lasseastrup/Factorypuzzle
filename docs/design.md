@@ -65,6 +65,11 @@ The threshold never rounds up. A stream at R per minute puts at least `floor(R �
 
 - Belt visual travel speed is a *tuned* number, not derived from throughput. A 60/min belt and a 240/min belt move items at similar visible speed but different spacing. Physically dishonest, dramatically better — and it costs nothing in accuracy, because spacing emerges from the spawn rate, so the visible rate always equals the real one.
 - Longest-path length in a level is still a level-design budget. A player should not be waiting long for the first item to cross.
+- **Editing a live factory must not mute belts that are still working.** A belt that already exists keeps its start time, full stop; only a genuinely new belt waits to fill.
+
+  The condition used to be "already exists *and* is carrying the same rate", which took a player report to expose. Two Mk1 belts into a merger with a Mk2 belt out: delete one input, the outgoing rate halves, and that belt was rescheduled as though brand new — no new material for three and a half seconds, on a line that was working the whole time. It reads exactly as the merger jamming.
+
+  A rate change alters how far apart the items sit. It says nothing about when the belt began carrying. The two got conflated because the rate is what the *solver* cares about, while the schedule is a presentation concern that merely reads from it — a good reminder that the two layers have different notions of "changed". If a belt's contents change *identity*, its cargo is cleared rather than morphing mid-run.
 
 ### 5.2 Space, and painted belts
 
