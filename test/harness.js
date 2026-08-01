@@ -175,7 +175,7 @@ const wrapped = body
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
   + '\n;globalThis.__pickDesign = function (d) { pickedType = "factory"; pickedDesign = d; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
-  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, getSelected: function(){return selected;}, getToast: function(){return document.getElementById("toast").textContent||"";}, hintText: function(){return document.getElementById("lvHint").textContent||"";}, getBeltFrom: function(){return beltFrom;}, armBelt: function(t){ if(tool==="belt" && beltTier===t) setTool("select"); else {beltTier=t;beltFrom=null;setTool("belt");} buildTray(); }, getStroke: function(){return stroke;}, getTool: function(){return tool;}, getPicked: function(){return pickedType;}, select: function(e){selected=e;buildMachines();showInspector(e);refreshRotate();}, armCard: function(t,r){ if(pickedType===t && pickedRecipe===(r||null)) setTool("select"); else {pickedType=t;pickedRecipe=r||null;pickedDesign=null;setTool("place");} buildTray(); }, selectNothing: function(){selected=null;showInspector(null);refreshRotate();}, rotVisible: function(){return document.getElementById("rotBtn").classList.contains("show");}, trayLabels: function(){return Array.from(document.querySelector("#trayScroll").children).map(function(c){return c.innerHTML;});}, menuHtml: function(){return document.getElementById("menu").innerHTML||"";}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
+  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, getSelected: function(){return selected;}, deleteLink: function(l){ dropWhere(links, function(x){return x===l;}); computeCrossings(); }, getToast: function(){return document.getElementById("toast").textContent||"";}, hintText: function(){return document.getElementById("lvHint").textContent||"";}, getBeltFrom: function(){return beltFrom;}, armBelt: function(t){ if(tool==="belt" && beltTier===t) setTool("select"); else {beltTier=t;beltFrom=null;setTool("belt");} buildTray(); }, getStroke: function(){return stroke;}, getTool: function(){return tool;}, getPicked: function(){return pickedType;}, select: function(e){selected=e;buildMachines();showInspector(e);refreshRotate();}, armCard: function(t,r){ if(pickedType===t && pickedRecipe===(r||null)) setTool("select"); else {pickedType=t;pickedRecipe=r||null;pickedDesign=null;setTool("place");} buildTray(); }, selectNothing: function(){selected=null;showInspector(null);refreshRotate();}, rotVisible: function(){return document.getElementById("rotBtn").classList.contains("show");}, trayLabels: function(){return Array.from(document.querySelector("#trayScroll").children).map(function(c){return c.innerHTML;});}, menuHtml: function(){return document.getElementById("menu").innerHTML||"";}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, getHold: function(){return deliveryProgress().worst;}, getClock: function(){return clockT;}, getDeliveries: function(){return deliveries.length;}, isReported: function(){return reported;}, DELIVER_WINDOW: DELIVER_WINDOW, deliveryProgress: function(){return deliveryProgress();}, rateMet: function(){return rateMet();}, solvedMap: function(){return solved;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
@@ -2017,3 +2017,65 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 14400);
+
+/* --- editing a running factory must not mute belts that are still working ---
+   Two Mk1 belts into a merger with a Mk2 belt out. Deleting one input halves the outgoing
+   rate. The belt was then rescheduled as though it were new and stopped spawning for a
+   whole cold start, so the line looked as if the merger had jammed. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- editing a live line ---');
+
+  api.loadLevel(6);                       /* Mk2 available */
+  const lv = api.LEVELS[6];
+  const m1 = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const m2 = api.addEntity('miner', lv.nodes[1].x, lv.nodes[1].z, 0);
+  const mg = api.addEntity('merger', 9, 6, 0);
+  const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
+  api.resolve();
+  api.armBelt(1); ok(api.connectByTap(m1, mg), 'first Mk1 belt into the merger');
+  api.armBelt(1); ok(api.connectByTap(m2, mg), 'second Mk1 belt in');
+  api.armBelt(2); ok(api.connectByTap(mg, depot), 'Mk2 belt out');
+  api.resolve();
+
+  const out = api.links().find((l) => l.from === mg.id);
+  let t = performance.now();
+  const run = (secs) => { for (let i = 0; i < secs / 0.04; i++) { t += 40; api.frame(t); } };
+  run(20);
+  ok(Math.abs(out.flow - 120) < 1e-6, `the outgoing belt carries both inputs (${out.flow.toFixed(0)}/min)`);
+  const startBefore = out.startT;
+  const itemsBefore = out.items.length;
+  ok(itemsBefore > 4, `and is carrying items (${itemsBefore})`);
+
+  /* delete one input */
+  const ins = api.links().filter((l) => l.to === mg.id);
+  api.deleteLink(ins[0]);
+  api.resolve();
+
+  ok(Math.abs(out.flow - 60) < 1e-6, `the rate halves as it should (${out.flow.toFixed(0)}/min)`);
+  ok(out.startT <= startBefore + 1e-6,
+    `but the belt is not rescheduled (startT ${startBefore.toFixed(2)} -> ${out.startT.toFixed(2)})`);
+  ok(out.startT <= api.getClock(), 'so it is still live rather than waiting to begin');
+
+  /* it must keep delivering without a gap */
+  let minItems = Infinity, delivered = 0;
+  const before = api.getDeliveries();
+  for (let i = 0; i < 250; i++) {
+    t += 40; api.frame(t);
+    minItems = Math.min(minItems, out.items.length);
+  }
+  delivered = api.getDeliveries() - before;
+  ok(minItems > 0, `the outgoing belt never empties (low water mark ${minItems} items)`);
+  ok(out.drain > 29, `and keeps delivering (${out.drain.toFixed(0)}/min)`);
+
+  /* the same must hold when a rate change comes from an upgrade rather than a deletion */
+  const remaining = api.links().find((l) => l.to === mg.id);
+  const s2 = out.startT;
+  remaining.tier = 2; remaining.cap = 120;
+  api.resolve();
+  ok(out.startT <= s2 + 1e-6, 'upgrading an inbound belt does not reschedule the outbound one');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 14900);

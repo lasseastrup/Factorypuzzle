@@ -2747,7 +2747,7 @@ function applyViewResults(res) {
 }
 
 function resolve() {
-  const prev = new Map(links.map((l) => [l.id, { flow: l.flow, startT: l.startT }]));
+  const prev = new Map(links.map((l) => [l.id, { flow: l.flow, startT: l.startT, item: l.item }]));
   const root = rootContext();
   result = solveNested({ entities: root.ents, links: root.links }, {}, { roomy });
   applyViewResults(result);
@@ -2798,16 +2798,23 @@ function scheduleSpinUp(prev) {
   for (const l of links) if (isFinite(l.startT) && (l.flow || 0) > 1e-4) spinUp = Math.max(spinUp, l.startT + l.length / BELT_SPEED);
   spinUp += 0.35;
 
-  /* Shift the schedule onto the running clock. A belt that already existed and is
-     still carrying the same rate keeps its original start, so it does not visibly
-     restart every time something elsewhere is edited. */
+  /* Shift the schedule onto the running clock.
+
+     A belt that already exists keeps its original start time, full stop. It used to keep
+     it only while its RATE was also unchanged, which was wrong: a rate change alters how
+     far apart the items sit, not when the belt began carrying. Deleting one of two inputs
+     to a merger halves the outgoing rate, so the outgoing belt was rescheduled as though
+     it were brand new and stopped spawning for a whole cold start — the line looked as if
+     the merger had jammed, when in fact it was working and had simply been told to wait.
+
+     Only a genuinely new belt needs the fill delay. */
   for (const e of ents) if (isFinite(e.startT)) e.startT += T0;
   for (const l of links) {
     if (!isFinite(l.startT)) continue;
     const was = prev && prev.get(l.id);
-    const unchanged = was && isFinite(was.startT) && Math.abs((was.flow || 0) - (l.flow || 0)) < 1e-6
-      && T0 >= was.startT + l.length / BELT_SPEED;
-    l.startT = unchanged ? was.startT : l.startT + T0;
+    l.startT = (was && isFinite(was.startT)) ? was.startT : l.startT + T0;
+    /* If it is now carrying something else, the old cargo should not morph into it. */
+    if (was && was.item && l.item && was.item !== l.item) { l.items = []; l.spawnAcc = 0; }
   }
 }
 const isLive = (e) => isFinite(e.startT) && clockT >= e.startT;
