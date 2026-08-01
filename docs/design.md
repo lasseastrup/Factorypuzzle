@@ -2,7 +2,7 @@
 
 *Working title. Alternatives: Throughput, Feedstock, Assembly Line, Per Minute.*
 
-**v0.7:** factories are player-built boxes that can be entered, nested and instanced from a shared design (§7).
+**v0.7:** factories are player-built boxes that can be entered and nested; every placement is an independent copy of a library design, with ports defined by terminals on the interior walls (§7).
 
 **v0.6:** the factory runs continuously — no play button, no waiting state; the depot counts what it actually receives (§5.1).
 
@@ -200,19 +200,21 @@ A **Factory** is a box the player places like any other machine. It has input an
 
 Machines can still be built freely outside a box. A factory is an organising tool, not a requirement.
 
-### 7.2 The interface grows by use
+### 7.2 The interface is drawn on the walls
 
-A box always shows **one spare input port and one spare output port**. Attaching a belt to a spare consumes it, a fresh spare appears, and a matching terminal appears inside to wire up.
+Inside a factory the player places **Input** and **Output** terminals, which snap to the interior walls and slide along them. Each terminal becomes a port on the matching face of the box outside, at the matching position along that face. The interface you draw inside is the interface you see out.
 
-This is worth spelling out because it interacts with sharing. Ports are created by attaching belts *outside*, which makes them feel like a property of the instance — but the interior is shared between instances, and an interior wired to a fixed set of terminals cannot serve one instance with two inputs and another with one. So **attaching a belt adds the terminal to the definition**: every instance gains that port, unconnected on the others, and the interior gains one terminal to wire. The interface grows by use, as intended, but it lives where the shared interior can see it.
+This means a factory can be **designed before it exists anywhere**. A "Build factory" button opens an empty interior; the design goes to the library; copies are placed later. Nothing has to be put in the world before you can start working on it.
 
-### 7.3 Instances share one design
+An earlier version created ports by attaching belts from outside, and grew the interface by use. That was abandoned because it contradicted shared interiors — one instance with two inputs and another with one cannot share an interior wired to a fixed set of terminals. Wall terminals define the interface from the one place that can see the whole picture.
 
-Placing the same factory twice creates two **instances of one definition**. Enter either one, change anything, and every instance changes with it. That is the point: a factory is a subroutine, and improving it improves every use at once.
+### 7.3 Every placement is its own copy
 
-An instance can be **unlinked**, which forks it a private copy of the definition. Necessary escape hatch — sometimes you want *nearly* the same thing — but the linked case is the interesting one and should be the default.
+Placing a design **deep-copies** it. Editing a placed factory changes only that box; editing the library entry changes only future placements. There is no editing-at-a-distance and no forked-definition bookkeeping.
 
-Instances are independent at *solve* time even though they share a design. Three copies fed 30, 15 and 0 ore per minute run at 100%, 50% and 0%. Shared design, individual behaviour.
+The cost is real and worth naming: a factory is a **blueprint, not a subroutine**. You lose "improve once, improve everywhere", which was the sharper version of the idea. What is bought is a model with no surprising action at a distance, no need for an unlink escape hatch, and no contradiction with per-instance ports. A "push changes to all copies" action could be added later if the blueprint model feels too flat.
+
+Instances are independent at solve time as well as in structure. Three copies fed 30, 15 and 0 ore per minute run at 100%, 50% and 0%.
 
 ### 7.4 Nesting
 
@@ -227,7 +229,8 @@ The consequence worth noting: the solver needs **no concept of hierarchy at all*
 ### 7.6 Open risks
 
 - **Legibility.** A box that reports "starved" tells you to go looking. Whether that is a satisfying investigation or a chore is the thing to playtest.
-- **Editing at a distance.** Changing a definition changes factories the player may have forgotten they built. There is no undo yet, and there probably needs to be.
+- **No undo.** Deleting a machine inside a factory is irreversible, and there is no undo anywhere in the prototype yet.
+- **Blueprint flatness.** With copies fully independent, there is no reward for going back and improving a design already in use. If that makes factories feel like organisation rather than leverage, a push-to-copies action is the fix.
 - **Scoring.** Machines and ore inside a factory count towards the level's totals, so a factory is organisational rather than free. Whether footprint should count the box or its contents is unresolved.
 
 ## 8. Level design & progression

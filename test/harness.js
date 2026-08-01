@@ -119,12 +119,22 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS','smoothPath','buildPath','smoothToRadius','MIN_RADIUS','SMOOTH_CAPS','ribbon','BELT_HW','RAIL_HW','BELT_TEX_PERIOD','gBelts','arcTable','advanceBelts','beltHasRoom','queuedOn','JAM_SPACING','itemMeshes','updateItems','roomy','resolveFlow',
   'ghostAt',
   'placeAt',
-  'gGhost'];
+  'gGhost',
+  'newDesign',
+  'editDesign',
+  'enterFactory',
+  'exitContext',
+  'factoryPorts',
+  'outItemOf',
+  'portError',
+  'freeInPort',
+  'finishStroke'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
+  + '\n;globalThis.__pickDesign = function (d) { pickedType = "factory"; pickedDesign = d; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
-  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
+  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, getHold: function(){return deliveryProgress().worst;}, getClock: function(){return clockT;}, getDeliveries: function(){return deliveries.length;}, isReported: function(){return reported;}, DELIVER_WINDOW: DELIVER_WINDOW, deliveryProgress: function(){return deliveryProgress();}, rateMet: function(){return rateMet();}, solvedMap: function(){return solved;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
@@ -144,6 +154,7 @@ setTimeout(() => {
     api.setTool('select');
     const lv = api.LEVELS[0];
     const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  api.resolve();
     const s = api.addEntity('smelter', 7.5, 7.5, 0);
     api.resolve();
     const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
@@ -253,6 +264,7 @@ setTimeout(() => {
   const lv = api.LEVELS[4];
   const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
   const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  api.resolve();
   const s1 = api.addEntity('smelter', 7, 5.5, 0);
   const s2 = api.addEntity('smelter', 7, 10.5, 0);
   api.resolve();
@@ -601,6 +613,7 @@ setTimeout(() => {
   /* place a miner on the node and aim at the TOP of its drill tower */
   const lv = api.LEVELS[0];
   const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  api.resolve();
   api.buildMachines();
   api.scene.updateMatrixWorld(true);
   api.frame(performance.now());
@@ -665,6 +678,7 @@ setTimeout(() => {
   const lv = api.LEVELS[1];
   const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
   const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  api.resolve();
   const sm = api.addEntity('smelter', 6.5, 3.5, 0);
   const co = api.addEntity('constructor', 10.5, 3.5, 0);
   co.recipe = 'plate';
@@ -838,6 +852,7 @@ setTimeout(() => {
   api.loadLevel(0);
   const lv = api.LEVELS[0];
   const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  api.resolve();
   const sm = api.addEntity('smelter', 8, 9, 0);
   api.resolve();
   const paint = (a, b) => {
@@ -972,3 +987,81 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 7400);
+
+/* --- building, entering and placing a factory, end to end --- */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- factories in the world ---');
+
+  api.loadLevel(1);
+  ok(api.getCtx().kind === 'level', 'a level starts as the root context');
+
+  /* design a factory without placing anything first */
+  const d = api.newDesign('Smelting');
+  api.editDesign(d);
+  ok(api.getCtx().kind === 'factory', 'the Build button opens an interior straight away');
+  ok(api.library().length === 1, 'and the design is in the library');
+
+  /* wall terminals define the ports */
+  const ti = api.addEntity('termIn', 1, 4, 1); ti.wall = 'w'; ti.index = 0;
+  const sm = api.addEntity('smelter', 6, 4, 1);
+  const to = api.addEntity('termOut', api.getCtx().w - 1, 4, 3); to.wall = 'e'; to.index = 0;
+  api.resolve();
+  const paint = (a, b) => {
+    const p0 = api.portsOf(a).out[Math.max(0, api.freeOutPort(a))];
+    const p1 = api.portsOf(b).in[0];
+    const pts = [];
+    for (let t = 0.1; t <= 1.0001; t += 0.1) pts.push({ x: p0.x + (p1.x - p0.x) * t, z: p0.z + (p1.z - p0.z) * t });
+    globalThis.__setStroke(a, Math.max(0, api.freeOutPort(a)));
+    api.commitStroke(pts, p1);
+  };
+  paint(ti, sm); paint(sm, to);
+  api.resolve();
+  ok(api.links().length === 2, 'the interior can be wired terminal to terminal');
+
+  api.exitContext();
+  ok(api.getCtx().kind === 'level', 'and you can come back out');
+
+  /* place two copies and feed only one */
+  api.setTool('place');
+  globalThis.__pickDesign(d);
+  const lv = api.LEVELS[1];
+  api.placeAt({ x: 6, z: 3 });
+  api.placeAt({ x: 13, z: 3 });
+  const boxes = api.ents().filter((e) => e.type === 'factory');
+  ok(boxes.length === 2, 'two instances placed from one design');
+  ok(boxes[0].def !== boxes[1].def, 'each placement owns its own interior');
+
+  const fp = api.factoryPorts(boxes[0]);
+  ok(fp.in.length === 1 && fp.out.length === 1, 'the box shows the ports its terminals defined');
+  ok(Math.abs(fp.in[0].x) > 1 || Math.abs(fp.in[0].z) > 1, 'and they sit on the box faces');
+
+  const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  api.resolve();
+  api.resolve();
+  paint(m, boxes[0]);
+  const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
+  paint(boxes[0], depot);
+  api.resolve();
+  ok((api.getResult().output.ingot || 0) > 29,
+    `the fed instance delivers through the level: ${(api.getResult().output.ingot || 0).toFixed(0)} ingots/min`);
+  ok(boxes[0].state === 'running', `the fed box reports running (${boxes[0].state})`);
+  ok(boxes[1].f === 0, 'the unfed box does nothing');
+
+  /* editing one copy must not touch the other */
+  api.enterFactory(boxes[0]);
+  ok(api.getCtx().kind === 'factory' && api.ents() === boxes[0].def.entities,
+    'entering a placed box edits that box');
+  const innerSm = api.ents().find((e) => e.type === 'smelter');
+  ok(innerSm && innerSm.f > 0.99, `inside, the machine shows this instance's real rate (${(innerSm.f * 100).toFixed(0)}%)`);
+  api.removeEntityById(innerSm.id);
+  api.resolve();
+  api.exitContext();
+  api.resolve();
+  ok((api.getResult().output.ingot || 0) < 1, 'breaking one copy stops its output');
+  ok(boxes[1].def.entities.some((e) => e.type === 'smelter'), 'and the other copy still has its smelter');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 7900);

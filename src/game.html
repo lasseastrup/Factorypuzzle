@@ -112,6 +112,13 @@
   .lv.done{border-color:var(--run);color:var(--run)}
   .lv.done.on{color:#5fd0a8}
 
+  #crumbs{position:fixed;left:8px;z-index:10;display:none;align-items:center;gap:5px;
+    background:rgba(236,234,225,.94);border:1px solid var(--line);border-radius:3px;padding:3px 6px}
+  #crumbs button{border:0;background:none;font:600 10px/1 var(--ui);letter-spacing:.04em;
+    text-transform:uppercase;color:var(--accent);cursor:pointer;padding:2px 3px}
+  #crumbs button:last-child{color:var(--ink)}
+  #crumbs span{color:#9a9a92;font-size:11px}
+
   #ruler{position:fixed;left:8px;bottom:78px;z-index:10;font-family:var(--mono);font-size:9px;
     color:#3b443e;background:rgba(236,234,225,.85);border:1px solid var(--line);border-radius:2px;
     padding:3px 6px;display:none}
@@ -138,6 +145,7 @@
   </div>
 </div>
 <div id="levelBar"></div>
+<div id="crumbs"></div>
 <div id="tools">
   <button class="tbtn on" data-tool="select">Select</button>
   <button class="tbtn" data-tool="belt">Paint belt</button>
@@ -239,6 +247,7 @@ const LEVELS = [
 const MACHINE_COLOR = {
   miner: 0x474d52, smelter: 0x9c4b36, constructor: 0x3d6a89,
   assembler: 0xa2833c, splitter: 0x5c6660, merger: 0x5c6660, sink: 0x2e5a48,
+  factory: 0x4a5b63, termIn: 0x4d7a4f, termOut: 0x7a4d4d,
 };
 const STATE_COLOR = {
   running: 0x2f9e6f, starved: 0xd99a20, throttled: 0xc9702c,
@@ -272,6 +281,28 @@ const ENDPOINT_GUARD = 0.55;   // convergence near a shared port is not a crossi
    STATE
    ============================================================ */
 let L = null, lvIndex = 0;
+
+/* ---- factory designs ----
+   A design is just { name, w, h, entities, links }. Placing one deep-copies it onto
+   the instance, so every placement is independent: editing a placed factory changes
+   only that box, and editing the library entry changes only future placements. That
+   costs the "improve once, improve everywhere" property, and buys a model with no
+   editing-at-a-distance and no forked-definition bookkeeping.
+
+   Designs live in memory for the session. A static page has nowhere to persist them. */
+const library = [];
+let libSeq = 0;
+const INTERIOR_W = 13, INTERIOR_H = 10;
+
+/* The editing context: the level, or the inside of some factory. Entering pushes,
+   exiting pops. Everything below operates on whatever is on top. */
+let ctx = null;              /* { kind, ents, links, w, h, ent?, design? } */
+const ctxStack = [];
+const inFactory = () => ctx && ctx.kind === 'factory';
+/* path of instance ids from the level down to here, used to read this instance's
+   own rates out of the flattened solve */
+const viewPath = () => ctxStack.concat([ctx]).filter((c) => c && c.kind === 'factory')
+  .map((c) => c.ent.id).join('/');
 const solved = {};
 let ents = [], links = [], nextId = 1;
 let tool = 'select', pickedType = null, pickedRecipe = null, pickedRot = 0, beltTier = 1;
@@ -318,7 +349,34 @@ function inPlot(e) {
 /* Ports in the machine's own frame: +z is the face it is turned toward, x is
    across. Kept separate from the world-space version so the renderer can place
    port meshes as children of an already-rotated group without rotating twice. */
+/* A factory's ports come from the terminals its designer placed on the interior
+   walls. A terminal's wall and its position along that wall map onto the matching
+   face of the box, so the interface you draw inside is the interface you see out. */
+function factoryPorts(e) {
+  const def = e.def || { entities: [] };
+  const d = MACHINES.factory;
+  const hx = d.w / 2, hz = d.h / 2;
+  const outP = [], inP = [], inItems = [], outIdx = [], inIdx = [];
+  const terms = (def.entities || []).filter((t) => t.type === 'termIn' || t.type === 'termOut');
+  terms.sort((a, b) => (a.index || 0) - (b.index || 0));
+  for (const t of terms) {
+    const iw = def.w || INTERIOR_W, ih = def.h || INTERIOR_H;
+    /* normalised position along the wall the terminal sits on */
+    let p;
+    if (t.wall === 'n' || t.wall === 's') p = { x: (t.x / iw - 0.5) * (d.w - 0.8), z: (t.wall === 'n' ? -hz : hz) };
+    else p = { x: (t.wall === 'w' ? -hx : hx), z: (t.z / ih - 0.5) * (d.h - 0.8) };
+    if (t.type === 'termOut') { outP.push(p); outIdx.push(t.index || 0); }
+    else { inP.push(p); inItems.push(null); inIdx.push(t.index || 0); }
+  }
+  return { out: outP, in: inP, inItems, outIdx, inIdx };
+}
+
 function localPorts(e) {
+  if (MACHINES[e.type] && MACHINES[e.type].kind === 'factory') return factoryPorts(e);
+  if (e.type === 'termIn') return { out: [{ x: 0, z: 0.9 }], in: [], inItems: [] };
+  /* Both terminals face inward: rotation already points their front at the interior,
+     so an output's input port belongs at the front too, not behind it against the wall. */
+  if (e.type === 'termOut') return { out: [], in: [{ x: 0, z: 0.9 }], inItems: [null] };
   const d = MACHINES[e.type];
   const fd = d.h / 2, cr = d.w / 2;
   const at = (fwd, side) => ({ x: side, z: fwd });
@@ -589,6 +647,40 @@ function buildPad() {
   clear(gEnv);
   aimSun();
 
+  if (inFactory()) {
+    /* Inside a factory: a floor with walls. Terminals go on the walls, and their
+       position along a wall is where the port appears on the outside of the box. */
+    const fl = new THREE.Mesh(new THREE.BoxGeometry(L.w, 0.5, L.h),
+      new THREE.MeshLambertMaterial({ color: 0xb9b6a6 }));
+    fl.position.set(L.w / 2, -0.25, L.h / 2);
+    fl.receiveShadow = true;
+    gPad.add(fl);
+    const wallMat = new THREE.MeshLambertMaterial({ color: 0x8e8b7c });
+    const wh = 1.1, th = 0.3;
+    const walls = [
+      [L.w / 2, -th / 2, L.w + th * 2, th], [L.w / 2, L.h + th / 2, L.w + th * 2, th],
+    ];
+    for (const [x, z, w, d] of walls) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), wallMat);
+      m.position.set(x, wh / 2 - 0.02, z);
+      m.castShadow = true; m.receiveShadow = true;
+      gPad.add(m);
+    }
+    for (const x of [-th / 2, L.w + th / 2]) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(th, wh, L.h + th * 2), wallMat);
+      m.position.set(x, wh / 2 - 0.02, L.h / 2);
+      m.castShadow = true; m.receiveShadow = true;
+      gPad.add(m);
+    }
+    const ticks = [];
+    for (let x = 0; x <= L.w; x++) ticks.push(x, 0.02, 0, x, 0.02, x % 5 === 0 ? 0.5 : 0.22);
+    for (let z = 0; z <= L.h; z++) ticks.push(0, 0.02, z, z % 5 === 0 ? 0.5 : 0.22, 0.02, z);
+    const tg = new THREE.BufferGeometry();
+    tg.setAttribute('position', new THREE.Float32BufferAttribute(ticks, 3));
+    gPad.add(new THREE.LineSegments(tg, new THREE.LineBasicMaterial({ color: 0x74705f })));
+    return;
+  }
+
   /* ---- concrete slab: the buildable plot, with a chamfered rim ---- */
   const slabH = 0.55;
   const slab = new THREE.Mesh(new THREE.BoxGeometry(L.w, slabH, L.h),
@@ -770,9 +862,16 @@ function addEntity(type, x, z, rot) {
   ents.push(e);
   return e;
 }
+/* Edit the arrays in place. Inside a factory, `ents` and `links` ARE the design's
+   arrays; reassigning them detaches the edit from the design, so a change made inside
+   a placed box quietly failed to stick. */
+function dropWhere(arr, pred) {
+  for (let i = arr.length - 1; i >= 0; i--) if (pred(arr[i])) arr.splice(i, 1);
+}
+
 function removeEntity(e) {
-  ents = ents.filter((x) => x !== e);
-  links = links.filter((l) => l.from !== e.id && l.to !== e.id);
+  dropWhere(ents, (x) => x === e);
+  dropWhere(links, (l) => l.from === e.id || l.to === e.id);
 }
 const entById = (id) => ents.find((e) => e.id === id);
 
@@ -791,6 +890,15 @@ function beltAt(p) {
 function outItemOf(e, depth) {
   if (!e || (depth || 0) > 12) return null;
   const d = MACHINES[e.type];
+  if (d.kind === 'factory') {
+    const pi = e.portItems || {};
+    const k = Object.keys(pi);
+    return k.length ? pi[k[0]] : null;      /* null means "unknown yet", not "wrong" */
+  }
+  if (e.type === 'termIn') {
+    const up = links.find((l) => l.to === e.id);
+    return up ? outItemOf(entById(up.from), (depth || 0) + 1) : (e.feedItem || null);
+  }
   if (d.kind === 'splitter' || d.kind === 'merger') {
     const up = links.find((l) => l.to === e.id);
     return up ? outItemOf(entById(up.from), (depth || 0) + 1) : null;
@@ -802,18 +910,21 @@ function outItemOf(e, depth) {
 /* which output port is still free? */
 function freeOutPort(e) {
   const ports = portsOf(e).out;
-  const used = links.filter((l) => l.from === e.id).map((l) => l.fromPort);
+  const used = links.filter((l) => l.from === e.id).map((l) => (l.slotFrom == null ? l.fromPort : l.slotFrom));
   for (let i = 0; i < ports.length; i++) if (!used.includes(i)) return i;
   return -1;
 }
 /* which input port accepts this item? */
 function freeInPort(e, item) {
   const P = portsOf(e);
-  const used = links.filter((l) => l.to === e.id).map((l) => l.toPort);
+  const used = links.filter((l) => l.to === e.id).map((l) => (l.slotTo == null ? l.toPort : l.slotTo));
   for (let i = 0; i < P.in.length; i++) {
     if (used.includes(i)) continue;
     const want = P.inItems[i];
-    if (want == null || want === item) return i;
+    /* item === null means "not known yet", which is normal when painting out of a
+       terminal or a factory that has not run. Refusing every port in that case made
+       a factory interior impossible to wire at all. */
+    if (want == null || item == null || want === item) return i;
   }
   return -1;
 }
@@ -828,7 +939,9 @@ function portError(a, b, item) {
       ? 'That splitter is full — three outputs is the limit.'
       : da.name + ' has one output port. Place a splitter to fan the line out.';
   }
-  if (db.kind !== 'sink' && db.kind !== 'splitter' && db.kind !== 'merger') {
+  if (db.kind === 'factory' || db.type === 'termOut' || db.kind === 'pass') {
+    /* a factory or a terminal takes whatever is offered; the interior decides */
+  } else if (db.kind !== 'sink' && db.kind !== 'splitter' && db.kind !== 'merger') {
     const r = recipeOf(b);
     if (!r || !Object.keys(r.in).length) return db.name + ' takes no input.';
     if (item && !r.in[item]) return db.name + ' has no use for ' + ITEMS[item].name + '.';
@@ -921,7 +1034,12 @@ function commitStroke(raw, endPoint, pickedEnd) {
   const len = arc[arc.length - 1];
   if (len < 0.4) return toast('Too short to be a belt.');
   const tier = BELTS.find((t) => t.id === beltTier) || BELTS[0];
-  links.push({ id: 'l' + (nextId++), from: a.id, to: b.id, fromPort: aPort, toPort: bPort,
+  /* For a factory the port slot and the terminal index are different things: slots
+     are ordered for the UI, indices identify the terminal inside. */
+  const fp = MACHINES[a.type].kind === 'factory' ? (factoryPorts(a).outIdx[aPort] || 0) : aPort;
+  const tp = MACHINES[b.type].kind === 'factory' ? (factoryPorts(b).inIdx[bPort] || 0) : bPort;
+  links.push({ id: 'l' + (nextId++), from: a.id, to: b.id, fromPort: fp, toPort: tp,
+               slotFrom: aPort, slotTo: bPort,
                cap: tier.cap, tier: tier.id, path: pts, arc, length: len, bumps: [] });
   computeCrossings();
   resolve();
@@ -1054,6 +1172,17 @@ function buildMachines() {
       part(g, new THREE.CylinderGeometry(0.46, 0.5, 0.3, 6), body, 0, 0.15, 0);
       part(g, new THREE.CylinderGeometry(0.2, 0.2, 0.1, 8), MAT(STEEL), 0, 0.33, 0);
 
+    } else if (def.kind === 'factory') {
+      /* a shell, deliberately blank: what matters is inside */
+      part(g, new THREE.BoxGeometry(w - 0.15, 0.9, d - 0.15), MAT(0x4a5b63), 0, 0.45, 0);
+      part(g, new THREE.BoxGeometry(w - 0.9, 0.16, d - 0.9), MAT(0x8fa0a8), 0, 0.96, 0);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        part(g, new THREE.BoxGeometry(0.22, 1.0, 0.22), MAT(0x2f3a40), sx * (w / 2 - 0.2), 0.5, sz * (d / 2 - 0.2));
+      }
+    } else if (e.type === 'termIn' || e.type === 'termOut') {
+      const c = e.type === 'termIn' ? 0x4d7a4f : 0x7a4d4d;
+      part(g, new THREE.BoxGeometry(0.9, 0.75, 1.7), MAT(c), 0, 0.375, 0);
+      part(g, new THREE.BoxGeometry(0.5, 0.2, 0.5), MAT(0xe0dccd), 0, 0.8, 0);
     } else if (def.kind === 'sink') {
       /* a depot shed, open toward the plot */
       part(g, new THREE.BoxGeometry(w, 0.22, d), MAT(0x8e8b7a), 0, 0.11, 0);
@@ -1407,15 +1536,48 @@ const roomy = (l) => beltHasRoom(l);
 let roomSig = '';
 function resolveFlow() {
   const keep = links.map((l) => l.startT);
-  result = solve({ entities: ents, links }, { roomy });
+  const root = rootContext();
+  result = solveNested({ entities: root.ents, links: root.links }, {}, { roomy });
+  applyViewResults(result);
   links.forEach((l, i) => { l.startT = keep[i]; });
   buildAll();
   refreshQuotas();
 }
 
+/* The level is always what gets solved, even while the player is inside a factory:
+   an interior only has real rates in the context of the instance feeding it. After
+   solving the flattened hierarchy, the results belonging to the instance being
+   viewed are copied onto the entities on screen. */
+function rootContext() {
+  return ctxStack.length ? ctxStack[0] : { ents, links };
+}
+
+function applyViewResults(res) {
+  if (!res || !res.flat || !inFactory()) return;
+  const chain = ctxStack.concat([ctx]).filter((c) => c && c.kind === 'factory');
+  const prefix = chain.map((c) => c.ent.id).join('/') + '/';
+  const byId = new Map(res.flat.entities.map((e) => [e.id, e]));
+  for (const e of ents) {
+    const fe = byId.get(prefix + e.id);
+    if (!fe) { e.f = 0; e.state = 'idle'; continue; }
+    e.f = fe.f; e.state = fe.state; e.avail = fe.avail; e.deficits = fe.deficits;
+    e.accept = fe.accept; e.fIn = fe.fIn; e.isRootCause = fe.isRootCause; e.limitedBy = fe.limitedBy;
+  }
+  const linkById = new Map();
+  for (const fl of res.flat.links) linkById.set(String(fl.id).replace(/^f\d+:/, ''), fl);
+  for (const l of links) {
+    const fl = linkById.get(prefix + l.id);
+    if (!fl) { l.flow = 0; l.want = 0; l.drain = 0; continue; }
+    l.flow = fl.flow; l.want = fl.want; l.drain = fl.drain; l.item = fl.item;
+    l.potFlow = fl.potFlow; l.saturated = fl.saturated; l.overCapacity = fl.overCapacity;
+  }
+}
+
 function resolve() {
   const prev = new Map(links.map((l) => [l.id, { flow: l.flow, startT: l.startT }]));
-  result = solve({ entities: ents, links }, { roomy });
+  const root = rootContext();
+  result = solveNested({ entities: root.ents, links: root.links }, {}, { roomy });
+  applyViewResults(result);
   scheduleSpinUp(prev);
   editT = clockT;
   /* When the last belt actually finishes filling, using the shifted schedule. A
@@ -1513,6 +1675,41 @@ function buildTray() {
       el.appendChild(card);
     }
   }
+  /* inside a factory: the wall terminals that define its ports */
+  if (inFactory()) {
+    for (const [type, label, sub] of [['termIn', 'Input', 'port on a wall'], ['termOut', 'Output', 'port on a wall']]) {
+      const card = document.createElement('button');
+      card.className = 'card' + (pickedType === type ? ' on' : '');
+      card.innerHTML = '<div class="bar" style="background:#'
+        + (type === 'termIn' ? '4d7a4f' : '7a4d4d') + '"></div>'
+        + '<div class="cn">' + label + '</div><div class="cr">' + sub + '</div>';
+      card.onclick = () => { pickedType = type; pickedRecipe = null; pickedDesign = null; setTool('place'); buildTray(); };
+      el.appendChild(card);
+    }
+  }
+
+  /* saved designs, placeable in the level */
+  for (const d of library) {
+    const n = (d.entities || []).filter((x) => MACHINES[x.type] && MACHINES[x.type].cost).length;
+    const pin = (d.entities || []).filter((x) => x.type === 'termIn').length;
+    const pout = (d.entities || []).filter((x) => x.type === 'termOut').length;
+    const card = document.createElement('button');
+    card.className = 'card' + (pickedDesign === d ? ' on' : '');
+    card.innerHTML = '<div class="bar" style="background:#4a5b63"></div>'
+      + '<div class="cn">' + d.name + '</div>'
+      + '<div class="cr">' + pin + ' in / ' + pout + ' out<br>' + n + ' machine' + (n === 1 ? '' : 's') + '</div>';
+    card.onclick = () => { pickedType = 'factory'; pickedDesign = d; pickedRecipe = null; setTool('place'); buildTray(); };
+    el.appendChild(card);
+  }
+
+  /* and a way to start a new one without placing anything first */
+  const nb = document.createElement('button');
+  nb.className = 'card';
+  nb.innerHTML = '<div class="bar" style="background:#2f6f8f"></div>'
+    + '<div class="cn">+ Build factory</div><div class="cr">design it, then<br>place copies</div>';
+  nb.onclick = () => editDesign(newDesign());
+  el.appendChild(nb);
+
   for (const t of L.belts) {
     const tier = BELTS.find((b) => b.id === t);
     const card = document.createElement('button');
@@ -1528,7 +1725,7 @@ function setTool(t) {
   tool = t;
   stroke = null;
   document.querySelectorAll('.tbtn[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === t));
-  if (t !== 'place') { pickedType = null; pickedRecipe = null; }
+  if (t !== 'place') { pickedType = null; pickedRecipe = null; pickedDesign = null; }
   clear(gGhost);
 }
 
@@ -1585,7 +1782,15 @@ function showInspector(e) {
   const box = $('#insp');
   if (!e) { box.style.display = 'none'; return; }
   const def = MACHINES[e.type], r = recipeOf(e);
-  let html = '<h4>' + def.name + (r && def.recipes.length > 1 ? ' · ' + r.label : '') + '</h4>';
+  let html = '<h4>' + ((def.kind === 'factory' && e.def && e.def.name) || def.name)
+    + (r && def.recipes.length > 1 ? ' · ' + r.label : '') + '</h4>';
+  if (def.kind === 'factory') {
+    const fp = factoryPorts(e);
+    html += '<div class="row"><span>Ports</span><span>' + fp.in.length + ' in / ' + fp.out.length + ' out</span></div>';
+    html += '<div class="row"><span>Inside</span><span>' + (e.innerCount || 0) + ' machines</span></div>';
+    const pi = e.portItems || {};
+    for (const k of Object.keys(pi)) html += '<div class="row"><span>Out ' + k + '</span><span>' + ITEMS[pi[k]].short + '</span></div>';
+  }
   if (def.kind !== 'sink' && def.kind !== 'splitter' && def.kind !== 'merger') {
     html += '<div class="row"><span>Running at</span><b style="color:#'
       + (STATE_COLOR[e.state] || 0x888888).toString(16).padStart(6, '0') + '">'
@@ -1617,21 +1822,35 @@ function showInspector(e) {
       + (Object.entries(r.out).map(([k, v]) => v + ' ' + ITEMS[k].short).join(' + ') || '—') + '/min</span></div>';
   }
   html += '<div class="acts">';
+  if (def.kind === 'factory') {
+    html += '<button data-act="enter">Enter</button>';
+    html += '<button data-act="save">Save to library</button>';
+  }
   if (def.recipes.length > 1) html += '<button data-act="recipe">Change recipe</button>';
   if (def.kind !== 'sink') html += '<button data-act="del">Remove</button>';
   html += '</div>';
   box.innerHTML = html;
   box.style.display = 'block';
   box.querySelectorAll('button').forEach((b) => b.onclick = () => {
+    if (b.dataset.act === 'enter') { enterFactory(e); return; }
+    if (b.dataset.act === 'save') {
+      const copy = JSON.parse(JSON.stringify(e.def || { w: INTERIOR_W, h: INTERIOR_H, entities: [], links: [] }));
+      copy.id = 'd' + (++libSeq);
+      copy.name = (e.def && e.def.name) || 'Factory';
+      library.push(copy);
+      buildTray();
+      toast('Saved. Place copies from the tray.');
+      return;
+    }
     if (b.dataset.act === 'del') { removeEntity(e); selected = null; showInspector(null); computeCrossings(); resolve(); }
     if (b.dataset.act === 'recipe') {
       const rs = def.recipes, i = rs.findIndex((x) => x.id === e.recipe);
       e.recipe = rs[(i + 1) % rs.length].id;
       /* input ports may have changed identity — drop links that no longer fit */
-      links = links.filter((l) => {
-        if (l.to !== e.id) return true;
+      dropWhere(links, (l) => {
+        if (l.to !== e.id) return false;
         const P = portsOf(e);
-        return l.toPort < P.in.length;
+        return (l.slotTo == null ? l.toPort : l.slotTo) >= P.in.length;
       });
       computeCrossings(); resolve(); showInspector(e);
     }
@@ -1658,7 +1877,7 @@ function showBeltInspector(l) {
   box.innerHTML = html;
   box.style.display = 'block';
   box.querySelectorAll('button').forEach((b) => b.onclick = () => {
-    if (b.dataset.act === 'del') links = links.filter((x) => x !== l);
+    if (b.dataset.act === 'del') dropWhere(links, (x) => x === l);
     else { const t = +b.dataset.tier; l.tier = t; l.cap = BELTS.find((x) => x.id === t).cap; }
     selected = null; showInspector(null); computeCrossings(); resolve();
   });
@@ -1994,7 +2213,41 @@ function drawStrokePreview() {
   if (g) gGhost.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55, side: THREE.DoubleSide })));
 }
 
+/* Terminals belong on a wall, so a tap anywhere snaps to the nearest one and slides
+   along it. Rotation is implied by which wall it lands on. */
+function snapToWall(x, z) {
+  const dN = z, dS = L.h - z, dW = x, dE = L.w - x;
+  const m = Math.min(dN, dS, dW, dE);
+  if (m === dN) return { wall: 'n', x: Math.max(1, Math.min(L.w - 1, x)), z: 0.9, rot: 0 };
+  if (m === dS) return { wall: 's', x: Math.max(1, Math.min(L.w - 1, x)), z: L.h - 0.9, rot: 2 };
+  if (m === dW) return { wall: 'w', x: 0.9, z: Math.max(1, Math.min(L.h - 1, z)), rot: 1 };
+  return { wall: 'e', x: L.w - 0.9, z: Math.max(1, Math.min(L.h - 1, z)), rot: 3 };
+}
+
 function placeAt(g) {
+  if (pickedType === 'termIn' || pickedType === 'termOut') {
+    if (!inFactory()) return toast('Terminals only go inside a factory.');
+    const s = snapToWall(g.x, g.z);
+    const err = canPlace(pickedType, s.x, s.z, s.rot);
+    if (err) return toast(err);
+    const e = addEntity(pickedType, s.x, s.z, s.rot);
+    e.wall = s.wall;
+    const kin = ents.filter((o) => o.type === pickedType);
+    e.index = kin.reduce((mx, o) => Math.max(mx, o === e ? -1 : (o.index == null ? -1 : o.index)), -1) + 1;
+    resolve();
+    toast((pickedType === 'termIn' ? 'Input' : 'Output') + ' port added to this factory');
+    return;
+  }
+  if (pickedType === 'factory') {
+    const err = canPlace('factory', g.x, g.z, pickedRot);
+    if (err) return toast(err);
+    const e = addEntity('factory', g.x, g.z, pickedRot);
+    /* an independent copy, so editing this box changes only this box */
+    e.def = pickedDesign ? JSON.parse(JSON.stringify(pickedDesign)) : { w: INTERIOR_W, h: INTERIOR_H, entities: [], links: [], seq: 0 };
+    e.def.name = (pickedDesign && pickedDesign.name) || 'Factory';
+    resolve();
+    return;
+  }
   const err = canPlace(pickedType, g.x, g.z, pickedRot);
   if (err) return toast(err);
   const e = addEntity(pickedType, g.x, g.z, pickedRot);
@@ -2008,7 +2261,7 @@ function handleTap(g, cx, cy) {
     const e = machineAtScreen(cx, cy) || entAt(g);
     if (e && MACHINES[e.type].kind !== 'sink') { removeEntity(e); computeCrossings(); resolve(); return; }
     const l = beltAt(g);
-    if (l) { links = links.filter((x) => x !== l); computeCrossings(); resolve(); return; }
+    if (l) { dropWhere(links, (x) => x === l); computeCrossings(); resolve(); return; }
     return;
   }
   const e = machineAtScreen(cx, cy) || entAt(g);
@@ -2020,10 +2273,16 @@ function handleTap(g, cx, cy) {
 
 function ghostAt(cx, cy) {
   clear(gGhost);
-  const g = groundAt(cx, cy);
+  let g = groundAt(cx, cy);
   if (!g || !pickedType) return;
-  const err = canPlace(pickedType, g.x, g.z, pickedRot);
-  const probe = { type: pickedType, x: g.x, z: g.z, rot: pickedRot, recipe: pickedRecipe };
+  let rot = pickedRot;
+  if ((pickedType === 'termIn' || pickedType === 'termOut') && inFactory()) {
+    const s = snapToWall(g.x, g.z);
+    g = { x: s.x, z: s.z };
+    rot = s.rot;
+  }
+  const err = canPlace(pickedType, g.x, g.z, rot);
+  const probe = { type: pickedType, x: g.x, z: g.z, rot, recipe: pickedRecipe, def: pickedDesign };
   const def = MACHINES[pickedType];
   const ok = !err;
   const tint = ok ? 0x2f9e6f : 0xc2402f;
@@ -2075,7 +2334,7 @@ $('#rotBtn').onclick = () => {
     selected.rot = (selected.rot + 1) % 4;
     const err = canPlace(selected.type, selected.x, selected.z, selected.rot, selected);
     if (err) { selected.rot = old; return toast('No room to turn that.'); }
-    links = links.filter((l) => l.from !== selected.id && l.to !== selected.id);
+    dropWhere(links, (l) => l.from === selected.id || l.to === selected.id);
     computeCrossings(); resolve();
     toast('Turned. Belts on that machine were removed.');
   } else {
@@ -2087,12 +2346,103 @@ $('#camBtn').onclick = () => { yawTarget += Math.PI / 2; };
 $('#plannerBtn').onclick = () => { plannerOn = !plannerOn; $('#plannerBtn').classList.toggle('on', plannerOn); };
 $('#scoreBtn').onclick = () => showReport(quotaMet());
 $('#clearBtn').onclick = () => {
-  ents = ents.filter((e) => MACHINES[e.type].kind === 'sink');
-  links = []; selected = null; showInspector(null);
+  dropWhere(ents, (e) => MACHINES[e.type].kind !== 'sink');
+  links.length = 0; selected = null; showInspector(null);
   $('#report').style.display = 'none';
   resolve();
 };
 addEventListener('resize', layoutCamera);
+
+/* ============================================================
+   FACTORIES: build, enter, exit
+   ============================================================ */
+function newDesign(name) {
+  const d = { id: 'd' + (++libSeq), name: name || ('Factory ' + (library.length + 1)),
+              w: INTERIOR_W, h: INTERIOR_H, entities: [], links: [], seq: 0 };
+  library.push(d);
+  return d;
+}
+
+function pushContext(c) {
+  ctxStack.push(ctx);
+  ctx = c;
+  ents = c.ents; links = c.links;
+  L = { w: c.w, h: c.h, nodes: [], rocks: [], depot: null,
+        quota: (ctxStack[0] && ctxStack[0].quota) || {}, belts: c.belts, tech: c.tech,
+        name: c.name, hint: c.hint, id: c.id, par: { machines: 0, belt: 0, ore: 0 } };
+  selected = null; stroke = null;
+  showInspector(null);
+  camCenter.set(c.w / 2, 0, c.h / 2);
+  zoomMax = Math.max(c.w, c.h) * 2.4;
+  zoom = Math.max(c.w, c.h) * 1.5;
+  layoutCamera();
+  buildPad(); buildTray(); buildItemPools();
+  setTool('select');
+  resolve();
+  refreshCrumbs();
+}
+
+function enterFactory(e) {
+  if (!e.def) e.def = { w: INTERIOR_W, h: INTERIOR_H, entities: [], links: [], seq: 0 };
+  pushContext({
+    kind: 'factory', ent: e, design: e.def,
+    ents: e.def.entities, links: e.def.links,
+    w: e.def.w || INTERIOR_W, h: e.def.h || INTERIOR_H,
+    belts: ctx.belts, tech: ctx.tech, name: e.def.name || 'Factory interior',
+    hint: 'Place Input and Output on the walls, then wire them up. Ports appear outside.',
+    id: 'inside',
+  });
+}
+
+function editDesign(d) {
+  pushContext({
+    kind: 'factory', ent: { id: 'design:' + d.id, def: d }, design: d,
+    ents: d.entities, links: d.links, w: d.w, h: d.h,
+    belts: ctx.belts, tech: ctx.tech, name: d.name,
+    hint: 'Designing. Place Input and Output on the walls, then place this factory in the level.',
+    id: 'design',
+  });
+}
+
+function exitContext() {
+  if (!ctxStack.length) return;
+  const parent = ctxStack.pop();
+  ctx = parent;
+  ents = parent.ents; links = parent.links;
+  if (parent.kind === 'level') {
+    L = LEVELS[lvIndex];
+  } else {
+    L = { w: parent.w, h: parent.h, nodes: [], rocks: [], depot: null,
+          quota: {}, belts: parent.belts, tech: parent.tech, name: parent.name,
+          hint: parent.hint, id: parent.id, par: { machines: 0, belt: 0, ore: 0 } };
+  }
+  selected = null; stroke = null;
+  showInspector(null);
+  camCenter.set(L.w / 2, 0, L.h / 2);
+  zoomMax = Math.max(L.w, L.h) * 2.4;
+  zoom = Math.max(L.w, L.h) * 1.5;
+  layoutCamera();
+  buildPad(); buildTray(); buildItemPools();
+  setTool('select');
+  resolve();
+  refreshCrumbs();
+}
+
+function refreshCrumbs() {
+  const el = $('#crumbs');
+  const parts = [];
+  const all = ctxStack.concat([ctx]).filter(Boolean);
+  all.forEach((c, i) => {
+    parts.push('<button data-up="' + (all.length - 1 - i) + '">'
+      + (c.kind === 'level' ? 'Level ' + (lvIndex + 1) : (c.name || 'Factory')) + '</button>');
+  });
+  el.innerHTML = parts.join('<span>&rsaquo;</span>');
+  el.style.display = all.length > 1 ? 'flex' : 'none';
+  el.querySelectorAll('button').forEach((b) => b.onclick = () => {
+    let up = +b.dataset.up;
+    while (up-- > 0) exitContext();
+  });
+}
 
 /* ============================================================
    LEVEL LOAD
@@ -2110,6 +2460,9 @@ function loadLevel(i) {
 
   addEntity('sink', L.depot.x, L.depot.z, 2);
   beltTier = L.belts[0];
+  ctxStack.length = 0;
+  ctx = { kind: 'level', ents, links, w: L.w, h: L.h, belts: L.belts, tech: L.tech,
+          name: L.name, hint: L.hint, id: L.id, quota: L.quota };
   camCenter.set(L.w / 2, 0, L.h / 2);
   zoomMin = 7;
   zoomMax = Math.max(L.w, L.h) * 2.4;   /* stays within the terrain we actually built */
@@ -2123,7 +2476,9 @@ function loadLevel(i) {
   buildPad(); buildTray(); buildLevelBar(); buildItemPools();
   setTool('select');
   resolve();
+  refreshCrumbs();
   $('#levelBar').style.top = ($('#docket').offsetHeight + 8) + 'px';
+  $('#crumbs').style.top = ($('#docket').offsetHeight + 40) + 'px';
 }
 
 /* ============================================================

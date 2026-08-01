@@ -426,10 +426,13 @@ function flatten(root, defs) {
     for (const e of ctx.entities || []) {
       const def = MACHINES[e.type];
       if (def && def.kind === 'factory') {
-        const inner = defs && defs[e.defId];
+        /* Each placement owns its interior outright, so the definition travels with
+           the entity. A defs map is still honoured for shared designs. */
+        const inner = e.def || (defs && defs[e.defId]);
         if (!inner) { local.set(e.id, null); continue; }
-        if (chain.indexOf(e.defId) !== -1) throw new Error('a factory cannot contain itself');
-        const child = visit(inner, prefix + e.id + '/', depth + 1, chain.concat([e.defId]));
+        const key = e.defId || inner;
+        if (chain.indexOf(key) !== -1) throw new Error('a factory cannot contain itself');
+        const child = visit(inner, prefix + e.id + '/', depth + 1, chain.concat([key]));
         local.set(e.id, { factory: true, terms: child });
       } else {
         const copy = Object.assign({}, e, { id: prefix + e.id, _src: e, _root: prefix === '' });
@@ -500,6 +503,15 @@ function solveNested(root, defs, opts) {
     e.f = seen ? frac : 0;
     e.state = seen ? worst : 'idle';
     e.innerCount = seen;
+    /* what each output port is actually carrying, so a belt painted from the box
+       knows its item without the player having to go and look inside */
+    e.portItems = {};
+    for (const fl of flat.links) {
+      const dest = flat.entities.find((x) => x.id === fl.to);
+      if (!dest || dest.type !== 'termOut') continue;
+      if (String(dest.id).indexOf(e.id + '/') !== 0) continue;
+      if (fl.item) e.portItems[dest.index == null ? 0 : dest.index] = fl.item;
+    }
   }
   res.flat = flat;
   return res;
