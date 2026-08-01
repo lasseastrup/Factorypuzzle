@@ -935,7 +935,12 @@ setTimeout(() => {
     `nothing ever gets closer than the packed spacing (worst gap ${worstGap.toFixed(3)} m vs ${api.JAM_SPACING})`);
   ok(!everPastEnd, 'no item ever runs off the end of the belt');
   ok(!everNegative, 'no item ever ends up behind the start');
-  ok(!api.beltHasRoom(link), 'the belt reports itself full at the input end');
+  /* This asserted beltHasRoom, which is the wrong question now that the two have been
+     separated. Once the belt is backed up the solver throttles the source to the drain
+     rate, so the queue stops growing at capacity and the rearmost item can sit up to one
+     spacing short of the input — there is room for one more, and the belt is still full. */
+  ok(api.beltBackedUp(link),
+    `the belt reports itself backed up (${link.items.length}/${api.beltItemCapacity(link)} items)`);
   ok(m.state === 'blocked', `and the miner blocks once it is (${m.state})`);
   ok(api.queuedOn(link) > 3, `the inspector can report the queue length (${api.queuedOn(link)} waiting)`);
 

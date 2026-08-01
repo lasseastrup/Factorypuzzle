@@ -10,6 +10,7 @@
     "test:levels": "node test/levels.test.js",
     "test:factory": "node test/factory.test.js",
     "test:newlevels": "node test/newlevels.test.js",
+    "verify": "npm test > /tmp/ratio-test.log 2>&1 && echo VERIFY_OK || (tail -40 /tmp/ratio-test.log; echo VERIFY_FAILED; exit 1)",
     "test:runtime": "node test/harness.js"
   },
   "devDependencies": { "three": "0.128.0" }
