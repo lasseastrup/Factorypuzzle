@@ -62,7 +62,10 @@
   .cardDel:hover{color:var(--block);background:rgba(0,0,0,.06)}
   .card .cn{font:600 10.5px/1.2 var(--ui)}
   .card .cr{font-family:var(--mono);font-size:9px;color:#6d7570;margin-top:3px;line-height:1.35}
-  .card .bar{height:3px;border-radius:2px;margin-bottom:4px}
+  .card .ch{height:22px;margin-bottom:3px;display:flex;align-items:center}
+  .ic{width:22px;height:22px;display:block}
+  .ig{display:inline-flex}
+  .ig .ic{width:14px;height:14px}
   #bar2{display:flex;gap:6px;padding:0 10px 9px;align-items:center}
   .mini{height:34px;padding:0 14px;border:1px solid var(--line);background:#f4f2ea;
     border-radius:17px;font:600 10.5px/1 var(--ui);letter-spacing:.03em;color:var(--ink-2);cursor:pointer}
@@ -326,7 +329,10 @@ const BELT_HW = 0.15;          // half width of the moving surface
 const RAIL_HW = 0.035;         // side rails are strips, not more belt
 const BELT_TEX_PERIOD = 0.38;  // metres per cleat
 const JAM_SPACING = 0.42;      // packed spacing when a belt has backed up
-const BELT_Y = 0.075;
+/* The belt runs on trestles rather than lying on the floor. At 0.075 it was flush with
+   the ground, which left the support legs with no gap to fill — they came out as small
+   dark cubes poking up through the middle of the belt every metre and a half. */
+const BELT_Y = 0.34;
 const MAX_ITEMS_PER_TYPE = 900;   // a fully packed factory can hold a lot of one item
 const CLEARANCE = 0.34;        // how close a belt may pass a machine or rock
 const STROKE_MIN_STEP = 0.16;  // sampling distance while painting
@@ -336,7 +342,7 @@ const MIN_RADIUS = 0.7;        // conveyors cannot turn on a dime, but a sweepin
                                // curve eats the straight runs that read as a factory
 const SMOOTH_CAPS = [40, 20, 10, 4, 0];  // smoothing passes, strongest tried first
 const SNAP_RADIUS = 2.2;       // how near a port a stroke must start or end
-const BUMP_H = 0.46, BUMP_SIG = 0.62;  // over-under at a crossing
+const BUMP_H = 0.52, BUMP_SIG = 0.62;  // over-under at a crossing
 const ENDPOINT_GUARD = 0.55;   // convergence near a shared port is not a crossing
 
 /* ============================================================
@@ -1914,7 +1920,8 @@ function buildBelts() {
       }
       railGeo.push({ path: rp, arc: ra, bumps: l.bumps, tier: l.tier, off: 0.07 });
     }
-    for (let s = 0.45; s < l.length; s += 1.5) legs.push({ l, s });
+    /* skip the very ends, where the rollers are */
+    for (let s = 0.9; s < l.length - 0.6; s += 1.6) legs.push({ l, s });
   }
   /* thin strips, not more full-width belt: they used to inherit BELT_HW, which
      tripled the apparent width of every conveyor with untextured grey */
@@ -1954,19 +1961,21 @@ function buildBelts() {
   }
 
   if (legs.length) {
-    const lm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.075, 1, 0.075),
-      new THREE.MeshLambertMaterial({ color: 0x4c5257 }), legs.length);
+    const lm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1, 1, 0.1),
+      MET(0x555b60), legs.length);
     const mx = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3();
-    legs.forEach(({ l, s }, i) => {
+    let n = 0;
+    legs.forEach(({ l, s }) => {
       const p = posAt(l, s);
-      const top = p.y - 0.11;
-      const hh = Math.max(0.12, top);
-      v.set(p.x, top - hh / 2, p.z);
-      mx.compose(v, q, new THREE.Vector3(1, hh, 1));
-      lm.setMatrixAt(i, mx);
+      const top = p.y - 0.13;                  /* the belt surface at this point */
+      if (top < 0.1) return;                   /* nothing to support */
+      v.set(p.x, top / 2, p.z);
+      mx.compose(v, q, new THREE.Vector3(1, top, 1));
+      lm.setMatrixAt(n++, mx);
     });
+    lm.count = n;
     lm.castShadow = true;
-    gBelts.add(lm);
+    if (n) gBelts.add(lm);
   }
 }
 
@@ -2089,9 +2098,10 @@ function updateItems(t) {
       const p = posAt(l, s);
       const q = posAt(l, Math.min(l.length, s + 0.25));
       const head = Math.atan2(q.x - p.x, q.z - p.z);
-      /* loose ore tumbles; finished goods lie flat, because they were placed there */
-      const roll = l.item === 'ore' ? s * 2.6 : (lie ? Math.PI / 2 : 0);
-      _e.set(roll, head, 0, 'YXZ');
+      /* Everything rides the belt. Tumbling the ore was a mistake: a conveyor carries
+         its cargo, it does not roll it along, and the rolling read as the ore being
+         dragged rather than transported. */
+      _e.set(lie ? Math.PI / 2 : 0, head, 0, 'YXZ');
       _q.setFromEuler(_e);
       _v.set(p.x, p.y, p.z);
       _m.compose(_v, _q, _sc);
@@ -2240,6 +2250,39 @@ function toast(msg) {
    which is where a player compares runs anyway. */
 function updateRuler() {}
 
+/* ---- icons ----
+   Authored as inline SVG rather than image files. No raster assets means nothing to load,
+   nothing to keep in sync with the build, crisp edges at any pixel ratio, and the whole
+   game stays a single self-contained file. Each glyph deliberately echoes the silhouette
+   of the thing in the world, so the card and the machine on the plot read as the same
+   object. */
+const ICON = {
+  miner: '<path d="M3 19h18M6 19V9l6-5 6 5v10M9 19v-5h6v5" /><circle cx="12" cy="8.5" r="1.7"/>',
+  smelter: '<path d="M3 19h18M5 19V8h11v11M8 5v3M8 5h4" /><path d="M7 19v-4h6v4"/>',
+  constructor: '<path d="M3 19h18M5 19V7h14v12M5 11h14M9 7V4h6v3"/>',
+  assembler: '<path d="M3 19h18M5 19v-8h14v8M8 11 5 6M16 11l3-5"/><circle cx="12" cy="15" r="2"/>',
+  splitter: '<path d="M4 12h6m0 0 5-5m-5 5 5 5M15 7h5M15 17h5"/>',
+  merger: '<path d="M20 12h-6m0 0-5-5m5 5-5 5M9 7H4M9 17H4"/>',
+  belt: '<path d="M3 12h18M6 8l3 4-3 4M12 8l3 4-3 4"/>',
+  factory: '<path d="M3 20h18V9l-5 3V9l-5 3V6H3z"/><path d="M7 20v-4h3v4"/>',
+  termIn: '<path d="M4 4v16M9 12h10m0 0-4-4m4 4-4 4"/>',
+  termOut: '<path d="M20 4v16M5 12h10m0 0-4-4m4 4-4 4"/>',
+};
+const ITEM_ICON = {
+  ore: '<path d="M6 16l2-7 5-2 5 4-2 6z"/>',
+  ingot: '<path d="M4 15h16l-2-5H6z"/>',
+  plate: '<path d="M3 11h18v3H3z"/>',
+  rod: '<path d="M4 12h16"/>',
+  screw: '<path d="M12 5v14M9 8h6M9 12h6M9 16h6"/>',
+  reinf: '<path d="M3 10h18v5H3z"/><path d="M7 10v5M12 10v5M17 10v5"/>',
+};
+const svg = (body, cls) => '<svg class="ic ' + (cls || '') + '" viewBox="0 0 24 24" '
+  + 'fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+  + 'stroke-linejoin="round" aria-hidden="true">' + body + '</svg>';
+const itemGlyph = (item) => '<span class="ig" style="color:#'
+  + ITEMS[item].color.toString(16).padStart(6, '0') + '">'
+  + svg(ITEM_ICON[item] || '<circle cx="12" cy="12" r="6"/>') + '</span>';
+
 function buildTray() {
   const el = $('#trayScroll');
   el.innerHTML = '';
@@ -2250,7 +2293,8 @@ function buildTray() {
       card.className = 'card' + (pickedType === type && (!r || pickedRecipe === r.id) ? ' on' : '');
       const ins = r && Object.keys(r.in).length ? Object.entries(r.in).map(([k, v]) => v + ' ' + ITEMS[k].short).join(' + ') : '—';
       const outs = r && Object.keys(r.out).length ? Object.entries(r.out).map(([k, v]) => v + ' ' + ITEMS[k].short).join(' + ') : 'pass through';
-      card.innerHTML = '<div class="bar" style="background:#' + MACHINE_COLOR[type].toString(16).padStart(6, '0') + '"></div>'
+      card.innerHTML = '<div class="ch" style="color:#' + MACHINE_COLOR[type].toString(16).padStart(6, '0') + '">'
+        + svg(ICON[type] || ICON.factory) + '</div>'
         + '<div class="cn">' + (r && def.recipes.length > 1 ? r.label : def.name) + '</div>'
         + '<div class="cr">' + ins + '<br>&#8595; ' + outs + '</div>';
       card.onclick = () => {
@@ -2268,8 +2312,8 @@ function buildTray() {
     for (const [type, label, sub] of [['termIn', 'Input', 'port on a wall'], ['termOut', 'Output', 'port on a wall']]) {
       const card = document.createElement('button');
       card.className = 'card' + (pickedType === type ? ' on' : '');
-      card.innerHTML = '<div class="bar" style="background:#'
-        + (type === 'termIn' ? '4d7a4f' : '7a4d4d') + '"></div>'
+      card.innerHTML = '<div class="ch" style="color:#' + (type === 'termIn' ? '4d7a4f' : '7a4d4d') + '">'
+        + svg(ICON[type]) + '</div>'
         + '<div class="cn">' + label + '</div><div class="cr">' + sub + '</div>';
       card.onclick = () => {
         if (pickedType === type) setTool('select');
@@ -2287,7 +2331,7 @@ function buildTray() {
     const pout = (d.entities || []).filter((x) => x.type === 'termOut').length;
     const card = document.createElement('button');
     card.className = 'card' + (pickedDesign === d ? ' on' : '');
-    card.innerHTML = '<div class="bar" style="background:#4a5b63"></div>'
+    card.innerHTML = '<div class="ch" style="color:#4a5b63">' + svg(ICON.factory) + '</div>'
       + '<div class="cn">' + d.name + '</div>'
       + '<div class="cr">' + pin + ' in / ' + pout + ' out<br>' + n + ' machine' + (n === 1 ? '' : 's') + '</div>';
     card.onclick = () => {
@@ -2307,8 +2351,9 @@ function buildTray() {
   /* and a way to start a new one without placing anything first */
   const nb = document.createElement('button');
   nb.className = 'card';
-  nb.innerHTML = '<div class="bar" style="background:#2f6f8f"></div>'
-    + '<div class="cn">+ Build factory</div><div class="cr">design it, then<br>place copies</div>';
+  nb.innerHTML = '<div class="ch" style="color:#2f6f8f">'
+    + svg('<path d="M12 5v14M5 12h14"/>') + '</div>'
+    + '<div class="cn">Build factory</div><div class="cr">design it, then<br>place copies</div>';
   nb.onclick = () => editDesign(newDesign());
   el.appendChild(nb);
 
@@ -2320,7 +2365,8 @@ function buildTray() {
     const tier = BELTS.find((b) => b.id === t);
     const card = document.createElement('button');
     card.className = 'card' + (tool === 'belt' && beltTier === t ? ' on' : '');
-    card.innerHTML = '<div class="bar" style="background:#' + tier.color.toString(16).padStart(6, '0') + '"></div>'
+    card.innerHTML = '<div class="ch" style="color:#' + tier.color.toString(16).padStart(6, '0') + '">'
+      + svg(ICON.belt) + '</div>'
       + '<div class="cn">Belt ' + tier.name + '</div>'
       + '<div class="cr">' + tier.cap + '/min<br>tap 2 machines</div>';
     card.onclick = () => {
@@ -2399,7 +2445,7 @@ function refreshQuotas() {
     const have = got[item] || 0;
     const d = document.createElement('div');
     d.className = 'q' + (have >= need - 1e-4 ? ' met' : '');
-    d.innerHTML = '<span class="sw" style="background:#' + ITEMS[item].color.toString(16).padStart(6, '0') + '"></span>'
+    d.innerHTML = itemGlyph(item)
       + ITEMS[item].name + ' <b>' + need + '</b>/min<span class="got">· '
       + fmt(have) + '</span>';
     box.appendChild(d);

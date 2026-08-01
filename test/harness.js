@@ -168,7 +168,8 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'attachOn',
   'snapPlacement',
   'inboundItems',
-  'repairInputSlots'];
+  'repairInputSlots',
+  'BELT_Y'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
@@ -1869,3 +1870,79 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 13400);
+
+/* --- belt supports, cargo attitude, and the icon set --- */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- belt structure and icons ---');
+
+  api.loadLevel(1);
+  const lv = api.LEVELS[1];
+  const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const sm = api.addEntity('smelter', 10, 3.5, 1);
+  api.resolve();
+  ok(api.connectByTap(m, sm), 'a belt is laid');
+  api.resolve();
+
+  /* the belt must sit high enough for its supports to be supports */
+  ok(api.BELT_Y > 0.25, `the belt runs above the floor (${api.BELT_Y} m)`);
+  const legH = api.BELT_Y - 0.13;
+  ok(legH > 0.15, `so a support has real height (${legH.toFixed(2)} m)`);
+
+  /* nothing may protrude through the belt surface — that was the dark cubes */
+  let through = 0;
+  api.gBelts.traverse((o) => {
+    if (!o.isMesh || o.isInstancedMesh) return;
+    if (o.position.y > api.BELT_Y + 0.02) through++;
+  });
+  ok(through === 0, `nothing sits on top of the belt surface (${through})`);
+
+  let legs = 0, rollers = 0;
+  api.gBelts.traverse((o) => {
+    if (!o.isInstancedMesh) return;
+    if (o.geometry.type === 'BoxGeometry') legs += o.count;
+    if (o.geometry.type === 'CylinderGeometry') rollers += o.count;
+  });
+  ok(rollers === 2, `a run has a roller at each end (${rollers})`);
+  ok(legs >= 1, `and supports along it (${legs})`);
+
+  /* cargo rides flat; nothing rolls */
+  const before = [];
+  api.updateItems(api.getClock());
+  const mesh = api.itemMeshes.ore;
+  const THREE2 = require('three');
+  const mx = new THREE2.Matrix4(), q = new THREE2.Quaternion(), v = new THREE2.Vector3(), s = new THREE2.Vector3();
+  const tilt = (t) => {
+    api.updateItems(t);
+    if (!mesh.count) return null;
+    mesh.getMatrixAt(0, mx);
+    mx.decompose(v, q, s);
+    const e = new THREE2.Euler().setFromQuaternion(q, 'YXZ');
+    return e.x;
+  };
+  /* let material actually reach the belt before sampling its attitude */
+  let tt = performance.now();
+  for (let i = 0; i < 260; i++) { tt += 40; api.frame(tt); }
+  const t0 = tilt(api.getClock());
+  const t1 = tilt(api.getClock() + 3);
+  if (t0 !== null && t1 !== null) {
+    ok(Math.abs(t0) < 1e-6 && Math.abs(t1) < 1e-6,
+      `ore keeps a constant attitude rather than rolling (${t0.toFixed(3)} -> ${t1.toFixed(3)})`);
+  } else {
+    ok(true, 'no ore on the belt to sample (skipped)');
+  }
+
+  /* icons: authored as inline SVG, so there is nothing to load and nothing to go missing */
+  const labels = api.trayLabels();
+  ok(labels.every((t) => /<svg/.test(t)), `every tray card carries an icon (${labels.length} cards)`);
+  ok(labels.some((t) => /viewBox="0 0 24 24"/.test(t)), 'drawn as inline SVG, not an image file');
+  ok(!/<img/.test(labels.join('')), 'no raster assets to load');
+  /* the stub does not serialise children into innerHTML, so read the chips themselves */
+  const chips = Array.from(document.getElementById('quotas').children).map((c) => c.innerHTML || '');
+  ok(chips.length > 0 && chips.every((t) => /<svg/.test(t)),
+    `quota chips show the item glyph (${chips.length} chips)`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 13900);

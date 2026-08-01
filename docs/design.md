@@ -393,6 +393,10 @@ Clean, bright, low-poly industrial. Flat colours, strong silhouettes, minimal te
 
 **And the cost has to be watched.** The polish took the scene from 250 draw calls at fifteen machines to 82, in the wrong direction first: every little box was its own mesh and its own material. The static parts of a machine never move relative to each other, so they are merged into one geometry with the colours baked into vertex colours; animated, transparent and textured parts are left out of the merge. Plot furniture gets the same treatment — ore clusters alone were eleven meshes per node. `test/harness.js` now asserts a draw-call budget, because detail is only worth having if it stays affordable.
 
+**Icons are authored as inline SVG, not image files.** Nothing to load, nothing to keep in sync with the build, crisp at any pixel ratio, and the game stays a single self-contained file. Each glyph deliberately echoes the silhouette of the thing in the world — the miner's headframe, the smelter's chimney, the splitter's fork — so a card and the machine on the plot read as the same object. The same applies to every texture in the game: the belt chevrons, the speckled concrete, the sky gradient and the contact shadow are all drawn procedurally at load.
+
+**A note on physical plausibility.** Two details were added during a polish pass and both had to come out, for the same reason: they were *motion for its own sake*. Ore was made to tumble as it travelled, which read as the belt dragging its cargo rather than carrying it — a conveyor's whole point is that things ride it. And the belt lay flush with the floor while being given support legs, which left the legs with no gap to fill; they surfaced as small dark cubes poking through the middle of the belt. The belt now runs 0.34 m up on visible trestles with a roller at each end, which is both what a conveyor looks like and what makes the supports mean something.
+
 Audio: rhythmic, layered. Each machine type contributes a loop; a well-balanced factory should sound like a groove locking in. A stalled line goes audibly arrhythmic — audio as a diagnostic channel.
 
 ---
