@@ -42,8 +42,8 @@ const MACHINES = {
   /* Terminals are the interior's view of the box's ports. They are plain
      passthroughs, so flattening needs no rewiring: an outside belt simply points at
      the terminal and the interior carries on from there. */
-  termIn:  { name: 'Input', w: 1, h: 2, kind: 'pass', cost: 0, recipes: [] },
-  termOut: { name: 'Output', w: 1, h: 2, kind: 'pass', cost: 0, recipes: [] },
+  termIn:  { name: 'Input', w: 1, h: 2, kind: 'pass', cost: 0, recipes: [], wallFixture: true },
+  termOut: { name: 'Output', w: 1, h: 2, kind: 'pass', cost: 0, recipes: [], wallFixture: true },
   merger:   { name: 'Merger',   w: 1, h: 1, kind: 'merger',   cost: 0, recipes: [] },
   sink:     { name: 'Depot',    w: 2, h: 2, kind: 'sink',     cost: 0, recipes: [] },
 };

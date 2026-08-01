@@ -128,7 +128,10 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'outItemOf',
   'portError',
   'freeInPort',
-  'finishStroke'];
+  'finishStroke',
+  'snapToWall',
+  'deleteDesign',
+  'boxOf'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
@@ -1065,3 +1068,78 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 7900);
+
+/* --- terminals must be placeable through the real placement path ---
+   The earlier factory test called addEntity directly and so never exercised placeAt,
+   which is exactly where terminal placement was broken: a 2 m deep fixture snapped
+   0.9 m from the wall overhangs the boundary, and the plot-margin check rejected it. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- placing terminals on walls ---');
+
+  api.loadLevel(0);
+  const d = api.newDesign('Wall test');
+  api.editDesign(d);
+  const c = api.getCtx();
+
+  /* every wall, through placeAt, aimed from well inside the room */
+  const aims = [
+    ['north', c.w / 2, 0.4, 'n'],
+    ['south', c.w / 2, c.h - 0.4, 's'],
+    ['west', 0.4, c.h / 2, 'w'],
+    ['east', c.w - 0.4, c.h / 2, 'e'],
+  ];
+  let placed = 0;
+  for (const [name, x, z, wall] of aims) {
+    globalThis.__pick('termIn', null);
+    api.setTool('place');
+    const n0 = api.ents().length;
+    api.placeAt({ x, z });
+    const added = api.ents().length - n0;
+    placed += added;
+    const e = api.ents()[api.ents().length - 1];
+    ok(added === 1, `an Input can be placed on the ${name} wall`);
+    if (added === 1) ok(e.wall === wall, `  and it records the ${name} wall (${e.wall})`);
+  }
+  ok(placed === 4, 'all four walls accept a terminal');
+
+  /* a terminal snapped to a wall must stay inside the room */
+  for (const e of api.ents().filter((x) => x.type === 'termIn')) {
+    const b = api.boxOf(e);
+    ok(b.x0 >= -0.03 && b.z0 >= -0.03 && b.x1 <= c.w + 0.03 && b.z1 <= c.h + 0.03,
+      `  the ${e.wall} terminal sits within the room`);
+  }
+
+  /* indices must be distinct, or two ports would collapse onto one terminal */
+  const idx = api.ents().filter((x) => x.type === 'termIn').map((x) => x.index);
+  ok(new Set(idx).size === idx.length, `each terminal gets its own index (${idx.join(',')})`);
+
+  /* outputs too */
+  globalThis.__pick('termOut', null);
+  api.setTool('place');
+  const n1 = api.ents().length;
+  api.placeAt({ x: c.w - 0.4, z: 2 });
+  ok(api.ents().length === n1 + 1, 'an Output can be placed as well');
+
+  /* and the box outside shows one port per terminal */
+  api.exitContext();
+  api.setTool('place');
+  globalThis.__pickDesign(d);
+  api.placeAt({ x: 7, z: 7 });
+  const box = api.ents().filter((e) => e.type === 'factory').pop();
+  ok(!!box, 'the design can be placed in the level');
+  const fp = api.factoryPorts(box);
+  ok(fp.in.length === 4 && fp.out.length === 1,
+    `the box shows 4 inputs and 1 output (${fp.in.length}/${fp.out.length})`);
+
+  /* deleting the design clears it from the tray but leaves the placed box alone */
+  const before = api.library().length;
+  api.deleteDesign(d);
+  ok(api.library().length === before - 1, 'deleting a design removes it from the library');
+  ok(api.ents().indexOf(box) >= 0, 'and the factory already placed is untouched');
+  ok(api.factoryPorts(box).in.length === 4, 'it keeps its own interior and ports');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 8400);

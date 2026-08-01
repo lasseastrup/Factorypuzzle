@@ -54,6 +54,10 @@
   .card{flex:0 0 auto;width:82px;border:1px solid var(--line);border-radius:3px;
     background:#f6f4ed;padding:5px 6px;cursor:pointer;text-align:left}
   .card.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+  .card{position:relative}
+  .cardDel{position:absolute;top:-1px;right:1px;width:18px;height:18px;line-height:17px;
+    text-align:center;font-size:14px;color:#8b8f8a;cursor:pointer;border-radius:3px}
+  .cardDel:hover{color:var(--block);background:rgba(0,0,0,.06)}
   .card .cn{font:600 10.5px/1.2 var(--ui)}
   .card .cr{font-family:var(--mono);font-size:9px;color:#6d7570;margin-top:3px;line-height:1.35}
   .card .bar{height:3px;border-radius:2px;margin-bottom:4px}
@@ -831,7 +835,14 @@ function makeSprite(text) {
    ============================================================ */
 function canPlace(type, x, z, rot, ignore) {
   const probe = { type, x, z, rot };
-  if (!inPlot(probe)) return 'Outside the plot.';
+  if (MACHINES[type].wallFixture) {
+    /* A wall fixture is meant to be flush with the boundary, so the margin the plot
+       check enforces would always reject it. It only has to stay within the plot. */
+    const wb = boxOf(probe);
+    if (wb.x0 < -0.02 || wb.z0 < -0.02 || wb.x1 > L.w + 0.02 || wb.z1 > L.h + 0.02) {
+      return 'Must sit against a wall.';
+    }
+  } else if (!inPlot(probe)) return 'Outside the plot.';
   const b = boxOf(probe);
   for (const o of ents) {
     if (o === ignore) continue;
@@ -1699,6 +1710,12 @@ function buildTray() {
       + '<div class="cn">' + d.name + '</div>'
       + '<div class="cr">' + pin + ' in / ' + pout + ' out<br>' + n + ' machine' + (n === 1 ? '' : 's') + '</div>';
     card.onclick = () => { pickedType = 'factory'; pickedDesign = d; pickedRecipe = null; setTool('place'); buildTray(); };
+    const del = document.createElement('span');
+    del.className = 'cardDel';
+    del.textContent = '\u00d7';
+    del.title = 'Delete this design';
+    del.onclick = (ev) => { ev.stopPropagation(); deleteDesign(d); };
+    card.appendChild(del);
     el.appendChild(card);
   }
 
@@ -2215,19 +2232,24 @@ function drawStrokePreview() {
 
 /* Terminals belong on a wall, so a tap anywhere snaps to the nearest one and slides
    along it. Rotation is implied by which wall it lands on. */
-function snapToWall(x, z) {
+function snapToWall(x, z, type) {
+  const def = MACHINES[type] || MACHINES.termIn;
+  const depth = def.h / 2;          /* how far the body reaches in from the wall */
+  const along = def.w / 2;
   const dN = z, dS = L.h - z, dW = x, dE = L.w - x;
   const m = Math.min(dN, dS, dW, dE);
-  if (m === dN) return { wall: 'n', x: Math.max(1, Math.min(L.w - 1, x)), z: 0.9, rot: 0 };
-  if (m === dS) return { wall: 's', x: Math.max(1, Math.min(L.w - 1, x)), z: L.h - 0.9, rot: 2 };
-  if (m === dW) return { wall: 'w', x: 0.9, z: Math.max(1, Math.min(L.h - 1, z)), rot: 1 };
-  return { wall: 'e', x: L.w - 0.9, z: Math.max(1, Math.min(L.h - 1, z)), rot: 3 };
+  const clampX = Math.max(along, Math.min(L.w - along, x));
+  const clampZ = Math.max(along, Math.min(L.h - along, z));
+  if (m === dN) return { wall: 'n', x: clampX, z: depth, rot: 0 };
+  if (m === dS) return { wall: 's', x: clampX, z: L.h - depth, rot: 2 };
+  if (m === dW) return { wall: 'w', x: depth, z: clampZ, rot: 1 };
+  return { wall: 'e', x: L.w - depth, z: clampZ, rot: 3 };
 }
 
 function placeAt(g) {
   if (pickedType === 'termIn' || pickedType === 'termOut') {
     if (!inFactory()) return toast('Terminals only go inside a factory.');
-    const s = snapToWall(g.x, g.z);
+    const s = snapToWall(g.x, g.z, pickedType);
     const err = canPlace(pickedType, s.x, s.z, s.rot);
     if (err) return toast(err);
     const e = addEntity(pickedType, s.x, s.z, s.rot);
@@ -2277,7 +2299,7 @@ function ghostAt(cx, cy) {
   if (!g || !pickedType) return;
   let rot = pickedRot;
   if ((pickedType === 'termIn' || pickedType === 'termOut') && inFactory()) {
-    const s = snapToWall(g.x, g.z);
+    const s = snapToWall(g.x, g.z, pickedType);
     g = { x: s.x, z: s.z };
     rot = s.rot;
   }
@@ -2361,6 +2383,18 @@ function newDesign(name) {
               w: INTERIOR_W, h: INTERIOR_H, entities: [], links: [], seq: 0 };
   library.push(d);
   return d;
+}
+
+/* Designs are independent of the boxes already placed from them, so deleting one
+   only removes it from the tray. Anything already built keeps working. */
+function deleteDesign(d) {
+  /* if we are inside it, come out first */
+  while (ctxStack.length && ctx && ctx.design === d) exitContext();
+  const i = library.indexOf(d);
+  if (i >= 0) library.splice(i, 1);
+  if (pickedDesign === d) { pickedDesign = null; pickedType = null; setTool('select'); }
+  buildTray();
+  toast('Design deleted. Factories already placed are unaffected.');
 }
 
 function pushContext(c) {
