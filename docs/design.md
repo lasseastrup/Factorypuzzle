@@ -91,6 +91,12 @@ The threshold never rounds up. A stream at R per minute puts at least `floor(R �
 
   Grid snapping applies **along** the belt only. The aimed-at grid position is projected onto the path, so on an orthogonal run the junction lands exactly on the grid and exactly on the belt; across the belt it goes wherever the belt runs, because the alternative is moving the belt. Two goals that looked like they conflicted mostly did not — the path is sampled every 0.3 m, so no *vertex* sat on the grid even when the line passed straight through it.
 
+  **The junction goes where the finger went**, projected onto the belt. Grid snapping was asked for and was a mistake in practice: it moved the junction up to half a metre from the aim, and when other junctions are nearby half a metre decides which belt you get. Being on the belt is the only alignment that matters.
+
+  **Aiming at a belt means the belt.** A junction has a one-metre footprint and sits *on* a belt, so a hit test on entities grabbed one from half a metre away — which made it impossible to tap a trunk anywhere near an existing junction. A machine between two already-tapped machines simply could not reach the trunk. An existing junction now only wins when the finger is genuinely on it, within 0.45 m.
+
+  **The preview runs the commit's own code.** It used to build its own approximation, and the commit falls back to the organic router when an orthogonal route will not fit — so whenever that happened, the belt that appeared bore no relation to the blueprint. One function now answers "what will this stroke produce", and both the preview and the commit ask it.
+
   **A branch is laid by the same code as any other belt.** There is one `layBelt`: every route in — a drag from a machine, two taps, or a branch off an existing belt — arrives with a source, a destination and the shape the player drew, and gets the same router, the same validation and the same failure messages. The preview goes through the same router too, standing a probe in for the not-yet-existent junction, so what is shown is what lands.
 
   This is worth stating because the first implementation had a second path: it auto-routed a straight line for the branch and discarded the shape that had just been drawn. It worked, which is what made it easy to miss. A game with two ways to make the same object will eventually have two sets of bugs in it, and the drawn shape mattering everywhere except one place is exactly the sort of inconsistency a player notices without being able to name.

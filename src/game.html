@@ -1528,6 +1528,49 @@ function straightRaw(a, b) {
   return out;
 }
 
+/* What a stroke is pointing at. Shared by the preview and the commit, so what is shown is
+   what gets laid.
+
+   A junction has a one-metre footprint and sits ON a belt, so entAt would grab one from half a
+   metre away — which made it impossible to splice a belt anywhere near an existing junction,
+   exactly as reported: the middle smelter could not reach the trunk because the junctions
+   either side kept winning. Aiming at a belt now means the belt, and an existing junction only
+   wins when the finger is genuinely on it. */
+const JUNCTION_GRAB = 0.45;
+
+function resolveTarget(a, endPoint, pickedEnd, beltPoint) {
+  if (pickedEnd && pickedEnd !== a) return { kind: 'ent', ent: pickedEnd };
+  const aim = beltPoint || endPoint;
+
+  const onto = beltAt(aim);
+  if (onto) {
+    let nearJ = null, nd = JUNCTION_GRAB;
+    for (const e of ents) {
+      if (!isJunction(e) || e === a) continue;
+      const d = Math.hypot(e.x - aim.x, e.z - aim.z);
+      if (d < nd) { nd = d; nearJ = e; }
+    }
+    if (nearJ) return { kind: 'ent', ent: nearJ };
+    if (onto.from !== a.id && onto.to !== a.id) return { kind: 'splice', link: onto, at: aim };
+  }
+
+  const hit = entAt(endPoint);
+  if (hit && hit !== a) {
+    if (!isJunction(hit)) return { kind: 'ent', ent: hit };
+    if (Math.hypot(hit.x - aim.x, hit.z - aim.z) < JUNCTION_GRAB) return { kind: 'ent', ent: hit };
+  }
+
+  let best = null, bd = SNAP_RADIUS * SNAP_RADIUS;
+  for (const e of ents) {
+    if (e === a || isJunction(e)) continue;
+    for (const p of portsOf(e).in) {
+      const d = dist2(p, endPoint);
+      if (d < bd) { bd = d; best = e; }
+    }
+  }
+  return best ? { kind: 'ent', ent: best } : null;
+}
+
 function commitStroke(raw, endPoint, pickedEnd, beltPoint) {
   /* started on a belt: splice a junction, and the drawn shape becomes the new branch */
   if (stroke.fromBelt) {
@@ -1537,30 +1580,15 @@ function commitStroke(raw, endPoint, pickedEnd, beltPoint) {
     return;
   }
   const a = stroke.fromEnt;
-  let b = (pickedEnd && pickedEnd !== a) ? pickedEnd : entAt(endPoint);
-  if (!b) {
-    let best = null, bd = SNAP_RADIUS * SNAP_RADIUS;
-    for (const e of ents) {
-      if (e === a) continue;
-      for (const p of portsOf(e).in) {
-        const d = dist2(p, endPoint);
-        if (d < bd) { bd = d; best = e; }
-      }
-    }
-    b = best;
-  }
-  if (!b) {
+  const tgt = resolveTarget(a, endPoint, pickedEnd, beltPoint);
+  if (!tgt) return toast('End the stroke on a machine, or on another belt.');
+  if (tgt.kind === 'splice') {
     /* released over a belt: splice a junction into it and feed it from here. The reverse of
        branching, and the same operation — the junction sorts out which way each belt runs. */
-    /* Tested at the belt's own height, and against the nearest belt rather than the first */
-    const aim = beltPoint || endPoint;
-    const onto = beltAt(aim);
-    if (onto && onto.from !== a.id && onto.to !== a.id) {
-      spliceJunction(onto, aim, a, raw);
-      return;
-    }
-    return toast('End the stroke on a machine, or on another belt.');
+    spliceJunction(tgt.link, tgt.at, a, raw);
+    return;
   }
+  const b = tgt.ent;
   if (layBelt(a, b, raw, stroke.fromPort)) {
     computeCrossings();
     resolve();
@@ -3176,6 +3204,9 @@ cv.addEventListener('pointermove', (ev) => {
   if (dragMode === 'paint' && stroke) {
     const g = groundAt(ev.clientX, ev.clientY);
     if (!g) return;
+    /* remembered so the preview can ask the same question the commit will: where the finger is
+       on screen decides which belt is under it, once belt height is accounted for */
+    stroke.sx = ev.clientX; stroke.sy = ev.clientY;
     const last = stroke.pts[stroke.pts.length - 1];
     if (!last || dist2(last, g) > STROKE_MIN_STEP * STROKE_MIN_STEP) stroke.pts.push(g);
     drawStrokePreview();
@@ -3263,44 +3294,61 @@ function previewRibbon(pts, bad) {
     vertexColors: true, transparent: true, opacity: 0.55, side: THREE.DoubleSide })) : null;
 }
 
+/* The path the commit WILL produce, for the finger's current position. The preview used to
+   build its own approximation: it called buildOrthoPath directly and had a separate fallback for
+   "no target yet". The commit uses finishStroke, which drops to the organic router when an
+   orthogonal route will not fit — so whenever that happened the belt that appeared bore no
+   relation to the blueprint. Asking the same function the same question is the only way the two
+   can agree. */
+function plannedPath() {
+  const a = stroke.fromEnt;
+  const endPoint = stroke.pts[stroke.pts.length - 1] || (a ? { x: a.x, z: a.z } : stroke.at);
+  if (!endPoint) return null;
+  const beltPoint = (stroke.sx != null) ? beltPlanePoint(stroke.sx, stroke.sy) : null;
+
+  /* dragging off a belt: the branch starts at the junction that will be spliced in */
+  if (stroke.fromBelt) {
+    const spot = spliceSpot(stroke.fromBelt, stroke.at);
+    if (!spot) return null;
+    const probe = { id: '_pj', type: 'junction', x: spot.point.x, z: spot.point.z, rot: 0 };
+    const tgt = resolveTarget(probe, endPoint, null, beltPoint);
+    const dst = (tgt && tgt.kind === 'ent') ? tgt.ent
+      : { id: '_pt', type: 'junction', x: endPoint.x, z: endPoint.z, rot: 0 };
+    const pair = orientPair(probe, dst) || [probe, dst];
+    let shape = stroke.pts.length > 1 ? stroke.pts.slice() : straightRaw(pair[0], pair[1]);
+    if (pair[0] === dst) shape = shape.reverse();
+    return { pts: finishStroke(shape, pair[0], 0, pair[1], 0), src: pair[0], dst: pair[1] };
+  }
+
+  const tgt = resolveTarget(a, endPoint, null, beltPoint);
+
+  /* releasing onto a belt: preview the run into the junction that will be spliced in */
+  if (tgt && tgt.kind === 'splice') {
+    const spot = spliceSpot(tgt.link, tgt.at);
+    if (!spot) return null;
+    const probe = { id: '_pj', type: 'junction', x: spot.point.x, z: spot.point.z, rot: 0 };
+    const pair = orientPair(a, probe) || [a, probe];
+    const shape = pair[0] === a ? stroke.pts : stroke.pts.slice().reverse();
+    return { pts: finishStroke(shape, pair[0], stroke.fromPort, pair[1], 0), src: pair[0], dst: pair[1] };
+  }
+
+  /* otherwise a machine, or nothing yet — in which case preview to the finger itself */
+  const dst = (tgt && tgt.kind === 'ent') ? tgt.ent
+    : { id: '_pt', type: 'junction', x: endPoint.x, z: endPoint.z, rot: 0 };
+  const pair = orientPair(a, dst) || [a, dst];
+  const shape = pair[0] === a ? stroke.pts : stroke.pts.slice().reverse();
+  const bPort = Math.max(0, freeInPort(pair[1], outItemOf(pair[0])));
+  const aPort = pair[0] === a ? stroke.fromPort : Math.max(0, freeOutPort(pair[0]));
+  return { pts: finishStroke(shape, pair[0], aPort, pair[1], bPort), src: pair[0], dst: pair[1] };
+}
+
 function drawStrokePreview() {
   clear(gGhost);
-  if (stroke.fromBelt) {
-    /* Preview the branch through the real router, so what is shown is what lands. The
-       junction does not exist yet, so a probe stands in for it — and a second probe stands in
-       for the finger when it is not yet over a machine. Both are junction-shaped, which means
-       both ends resolve to points and the route comes out exactly as it will. */
-    const spot = spliceSpot(stroke.fromBelt, stroke.at);
-    if (!spot) return;
-    const tip = stroke.pts[stroke.pts.length - 1] || stroke.at;
-    const probeSrc = { id: '_pj', type: 'junction', x: spot.point.x, z: spot.point.z, rot: 0 };
-    const target = entAt(tip) || { id: '_pt', type: 'junction', x: tip.x, z: tip.z, rot: 0 };
-    let pts = null;
-    try { pts = buildOrthoPath(stroke.pts, probeSrc, 0, target, 0); } catch (err) { pts = null; }
-    if (!pts || pts.length < 2) return;
-    const bad = !!routeBlocked(pts, probeSrc, target);
-    const geo = previewRibbon(pts, bad);
-    if (geo) gGhost.add(geo);
-    return;
-  }
-  const a = stroke.fromEnt;
-  const start = portsOf(a).out[stroke.fromPort];
-  /* preview the orthogonal route, so what is shown is what lands */
-  const target = entAt(stroke.pts[stroke.pts.length - 1] || start);
-  let pts;
-  if (target && target !== a) {
-    const ip = freeInPort(target, outItemOf(a));
-    pts = ip >= 0 ? buildOrthoPath(stroke.pts, a, stroke.fromPort, target, ip) : null;
-  }
-  if (!pts) {
-    const na = portNormal(a, start);
-    const stubA = { x: start.x + na.x * PORT_STUB, z: start.z + na.z * PORT_STUB };
-    const mid = simplify(stroke.pts.filter((p) => dist2(p, stubA) > 0.6 * 0.6), Math.max(SIMPLIFY_EPS, 0.5));
-    pts = resample(filletCorners(rectilinear(mergeCollinear([start, stubA].concat(mid)), stroke.pts), MIN_RADIUS), RESAMPLE);
-  }
-  if (!pts || pts.length < 2) return;
-  const bad = !!routeBlocked(pts, a, entAt(pts[pts.length - 1]));
-  const geo = previewRibbon(pts, bad);
+  let plan = null;
+  try { plan = plannedPath(); } catch (err) { plan = null; }
+  if (!plan || !plan.pts || plan.pts.length < 2) return;
+  const bad = !!routeBlocked(plan.pts, plan.src, plan.dst);
+  const geo = previewRibbon(plan.pts, bad);
   if (geo) gGhost.add(geo);
 }
 
@@ -3384,7 +3432,13 @@ function repairInputSlots() {
 function spliceSpot(link, at) {
   const path = link.path;
   if (!path || path.length < 3) return null;
-  const aim = snapPlacement('junction', at.x, at.z, 0);
+  /* The junction goes where the player touched, projected onto the belt.
+
+     Grid snapping was asked for and turned out to be a mistake in practice: it moved the
+     junction up to half a metre from where the finger went, which fights intent — most visibly
+     when other junctions are nearby and half a metre decides which belt you get. Being on the
+     belt is the only alignment that matters here. */
+  const aim = { x: at.x, z: at.z };
   const arc = link.arc || arcTable(path);
 
   /* Project the grid position onto the belt rather than taking the nearest existing vertex.

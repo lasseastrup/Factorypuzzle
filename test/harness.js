@@ -185,7 +185,9 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'beltPlanePoint',
   'beltSpeed',
   'TIER_TEX',
-  'BELTS'];
+  'BELTS',
+  'resolveTarget',
+  'plannedPath'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
@@ -2427,13 +2429,11 @@ setTimeout(() => {
   const js = api.ents().filter((e) => e.type === 'junction');
   ok(js.length === 1, 'with exactly one junction');
   const jx = js[0];
-  /* A junction sits ON the belt, so it can only be grid-aligned along the belt's direction —
-     across it, it is wherever the belt runs. Demanding both axes was demanding the belt move,
-     which is the very thing that made runs change shape. What matters is that it is on the
-     belt and tidy in the axis where tidiness is available. */
-  const onGridAxis = Math.abs(jx.x - Math.round(jx.x - 0.5) - 0.5) < 1e-6
-    || Math.abs(jx.z - Math.round(jx.z - 0.5) - 0.5) < 1e-6;
-  ok(onGridAxis, `and it is grid-aligned along the belt (${jx.x}, ${jx.z})`);
+  /* Grid snapping was removed: it moved the junction up to half a metre from where the finger
+     went, and when junctions already sit nearby that half metre decides which belt you get.
+     What the junction must be is ON the belt, which is asserted below. */
+  const aimed = api.links().length > 0;
+  ok(aimed, 'the splice produced belts');
   const belts = api.links().filter((l) => l.from === jx.id || l.to === jx.id);
   const sits = belts.every((l) => {
     const end = l.from === jx.id ? l.path[0] : l.path[l.path.length - 1];
@@ -2888,3 +2888,92 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 18900);
+
+/* --- the middle machine must be able to reach the trunk, and the preview must be honest --- */
+setTimeout(() => {
+  const THREE2 = require('three');
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- aiming past existing junctions ---');
+
+  /* Reproduce the reported layout: a trunk along the bottom with junctions already spliced
+     into it either side of the machine that cannot reach it. */
+  api.loadLevel(6);
+  const lv = api.LEVELS[6];
+  api.clearPlot();
+  /* Trunk first, along the bottom of the corridor, then the smelters above it — placing them
+     first put them across the trunk's route and the trunk simply could not be laid. */
+  const feeder = api.addEntity('miner', lv.nodes[2].x, lv.nodes[2].z, 0);
+  const sink = api.addEntity('smelter', 26, 9, 1);
+  api.resolve();
+  api.armBelt(3);
+  ok(api.connectByTap(feeder, sink), `a trunk runs along the corridor (${JSON.stringify(api.getToast())})`);
+  api.resolve();
+  const trunk = api.links()[0];
+  const left = api.addEntity('smelter', 10, 5, 1);
+  const mid = api.addEntity('smelter', 14, 5, 1);
+  const right = api.addEntity('smelter', 18, 5, 1);
+  api.resolve();
+
+  /* splice the two outer smelters in, leaving the middle one unconnected */
+  const nearestOn = (x) => {
+    let best = trunk.path[0], bd = Infinity;
+    for (const q of trunk.path) { const d = Math.abs(q.x - x); if (d < bd) { bd = d; best = q; } }
+    return best;
+  };
+  ok(api.spliceJunction(trunk, nearestOn(left.x), left, null), 'the left smelter taps it');
+  api.resolve();
+  const trunk2 = api.links().find((l) => l.to === sink.id) || api.links()[1];
+  ok(api.spliceJunction(trunk2, nearestOn(right.x), right, null), 'and the right smelter taps it');
+  api.resolve();
+  const js = api.ents().filter((e) => e.type === 'junction');
+  ok(js.length === 2, `two junctions now sit on the trunk (${js.length})`);
+
+  /* now aim from the middle smelter at the trunk, between them */
+  const segment = api.links().find((l) => {
+    if (!l.path) return false;
+    const xs = l.path.map((q) => q.x);
+    return Math.min(...xs) < mid.x && Math.max(...xs) > mid.x && l.tier === 3;
+  });
+  ok(!!segment, 'a stretch of trunk passes under the middle smelter');
+  if (segment) {
+    const aim = nearestOn(mid.x);
+    const distToJ = Math.min(...js.map((j) => Math.hypot(j.x - aim.x, j.z - aim.z)));
+    ok(distToJ > 0.45, `the aim point is clear of both junctions (${distToJ.toFixed(2)} m away)`);
+    const tgt = api.resolveTarget(mid, aim, null, aim);
+    ok(!!tgt && tgt.kind === 'splice',
+      `aiming at the trunk resolves to splicing it, not to a junction (${tgt && tgt.kind})`);
+    const before = api.ents().filter((e) => e.type === 'junction').length;
+    ok(api.spliceJunction(segment, aim, mid, null),
+      `the middle smelter can reach the trunk (${JSON.stringify(api.getToast())})`);
+    api.resolve();
+    ok(api.ents().filter((e) => e.type === 'junction').length === before + 1,
+      'by getting its own junction rather than joining someone else\\u2019s');
+  }
+
+  /* a finger genuinely on an existing junction should still connect to it */
+  const j0 = js[0];
+  const t2 = api.resolveTarget(mid, { x: j0.x, z: j0.z }, null, { x: j0.x, z: j0.z });
+  ok(!!t2 && t2.kind === 'ent' && t2.ent === j0,
+    'but a finger right on a junction still means that junction');
+
+  /* junctions follow the finger rather than the grid */
+  api.clearPlot();
+  const m2 = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const s3 = api.addEntity('smelter', 20, 4, 1);
+  api.resolve();
+  api.armBelt(1);
+  api.connectByTap(m2, s3);
+  api.resolve();
+  const tr = api.links()[0];
+  const want = tr.path[Math.floor(tr.path.length * 0.4)];
+  const spot = api.spliceSpot(tr, want);
+  ok(!!spot, 'a splice spot is found');
+  if (spot) {
+    const off = Math.hypot(spot.point.x - want.x, spot.point.z - want.z);
+    ok(off < 0.05, `and it lands where the finger went, not on the grid (${off.toFixed(3)} m away)`);
+  }
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 19400);
