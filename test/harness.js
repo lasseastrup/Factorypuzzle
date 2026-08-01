@@ -167,7 +167,7 @@ const wrapped = body
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
   + '\n;globalThis.__pickDesign = function (d) { pickedType = "factory"; pickedDesign = d; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
-  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, getSelected: function(){return selected;}, getToast: function(){return document.getElementById("toast").textContent||"";}, hintText: function(){return document.getElementById("lvHint").textContent||"";}, getStroke: function(){return stroke;}, getTool: function(){return tool;}, getPicked: function(){return pickedType;}, select: function(e){selected=e;buildMachines();showInspector(e);refreshRotate();}, armCard: function(t,r){ if(pickedType===t && pickedRecipe===(r||null)) setTool("select"); else {pickedType=t;pickedRecipe=r||null;pickedDesign=null;setTool("place");} buildTray(); }, selectNothing: function(){selected=null;showInspector(null);refreshRotate();}, rotVisible: function(){return document.getElementById("rotBtn").classList.contains("show");}, trayLabels: function(){return Array.from(document.querySelector("#trayScroll").children).map(function(c){return c.innerHTML;});}, menuHtml: function(){return document.getElementById("menu").innerHTML||"";}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
+  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, getSelected: function(){return selected;}, getToast: function(){return document.getElementById("toast").textContent||"";}, hintText: function(){return document.getElementById("lvHint").textContent||"";}, getBeltFrom: function(){return beltFrom;}, armBelt: function(t){ if(tool==="belt" && beltTier===t) setTool("select"); else {beltTier=t;beltFrom=null;setTool("belt");} buildTray(); }, getStroke: function(){return stroke;}, getTool: function(){return tool;}, getPicked: function(){return pickedType;}, select: function(e){selected=e;buildMachines();showInspector(e);refreshRotate();}, armCard: function(t,r){ if(pickedType===t && pickedRecipe===(r||null)) setTool("select"); else {pickedType=t;pickedRecipe=r||null;pickedDesign=null;setTool("place");} buildTray(); }, selectNothing: function(){selected=null;showInspector(null);refreshRotate();}, rotVisible: function(){return document.getElementById("rotBtn").classList.contains("show");}, trayLabels: function(){return Array.from(document.querySelector("#trayScroll").children).map(function(c){return c.innerHTML;});}, menuHtml: function(){return document.getElementById("menu").innerHTML||"";}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, getHold: function(){return deliveryProgress().worst;}, getClock: function(){return clockT;}, getDeliveries: function(){return deliveries.length;}, isReported: function(){return reported;}, DELIVER_WINDOW: DELIVER_WINDOW, deliveryProgress: function(){return deliveryProgress();}, rateMet: function(){return rateMet();}, solvedMap: function(){return solved;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
@@ -1318,8 +1318,8 @@ setTimeout(() => {
   /* belt tiers are no longer tray cards */
   api.setTool('select');
   const cards = api.trayLabels();
-  ok(!cards.some((t) => /Belt Mk/.test(t)), `no belt tier cards in the tray (${cards.length} cards)`);
-  ok(cards.some((t) => /Build factory/.test(t)), 'the tray still offers Build factory');
+  ok(cards.some((t) => /Belt Mk/.test(t)), `the tray offers a Belt card (${cards.length} cards)`);
+  ok(cards.some((t) => /Build factory/.test(t)), 'and Build factory');
 
   /* the level menu carries what three buttons used to */
   api.buildLevelBar();
@@ -1522,3 +1522,83 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 10900);
+
+/* --- the Belt card, and tap-to-connect ---
+   The drag gesture works, but with no card in the tray there was no visible way to make
+   a belt at all. Both routes must work, and both must end in the same routing code. */
+setTimeout(() => {
+  const THREE2 = require('three');
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- belt card ---');
+
+  const cv = api.renderer.domElement;
+  const S = (x, z) => {
+    const v = new THREE2.Vector3(x, 0, z).project(api.camera);
+    return { x: (v.x * 0.5 + 0.5) * 390, y: (-v.y * 0.5 + 0.5) * 844 };
+  };
+  const tap = (e) => {
+    const A = S(e.x, e.z);
+    cv.fire('pointerdown', { pointerId: 1, clientX: A.x, clientY: A.y });
+    cv.fire('pointerup', { pointerId: 1, clientX: A.x, clientY: A.y });
+  };
+
+  api.loadLevel(3);                     /* has Mk1 and Mk2 */
+  const lv = api.LEVELS[3];
+  const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const sm = api.addEntity('smelter', 8, 3.5, 1);
+  api.resolve();
+
+  const cards = api.trayLabels();
+  const beltCards = cards.filter((t) => /Belt Mk/.test(t));
+  ok(beltCards.length === lv.belts.length,
+    `one Belt card per available tier (${beltCards.length} for ${lv.belts.length} tiers)`);
+  ok(/tap 2 machines/.test(beltCards[0]), 'the card says what to do with it');
+
+  /* arm it and lay a belt with two taps */
+  api.armBelt(1);
+  ok(api.getTool() === 'belt', 'the card arms belt mode');
+  const n0 = api.links().length;
+  tap(m);
+  ok(api.getBeltFrom() === m, 'the first tap picks the source');
+  ok(api.links().length === n0, 'and lays nothing yet');
+  tap(sm);
+  ok(api.links().length === n0 + 1, 'the second tap lays the belt');
+  ok(api.getBeltFrom() === null, 'and clears the pending source');
+  ok(api.getTool() === 'select', 'then disarms, so the camera is free');
+
+  /* the tap route must produce the same orthogonal routing as a drag */
+  const laid = api.links()[api.links().length - 1];
+  let axis = 0, total = 0;
+  for (let i = 1; i < laid.path.length; i++) {
+    const dx = laid.path[i].x - laid.path[i - 1].x, dz = laid.path[i].z - laid.path[i - 1].z;
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-9) continue;
+    total += len;
+    const a = Math.atan2(Math.abs(dz), Math.abs(dx));
+    if (a < 0.052 || a > Math.PI / 2 - 0.052) axis += len;
+  }
+  ok(axis / total > 0.7, `a tapped belt is routed orthogonally too (${((axis / total) * 100).toFixed(0)}%)`);
+
+  /* the chosen tier is respected */
+  const co = api.addEntity('constructor', 12, 3.5, 1);
+  co.recipe = 'rod';
+  api.resolve();
+  api.armBelt(2);                     /* once: a second call would toggle it back off */
+  tap(sm); tap(co);
+  const mk2 = api.links()[api.links().length - 1];
+  ok(mk2.tier === 2, `the card's tier is used (Mk${mk2.tier}, ${mk2.cap}/min)`);
+
+  /* tapping the armed card again disarms; tapping the source twice cancels */
+  api.armBelt(1);
+  api.armBelt(1);
+  ok(api.getTool() === 'select', 'tapping the armed Belt card disarms it');
+  api.armBelt(1);
+  tap(co);
+  ok(api.getBeltFrom() === co, 'source picked');
+  tap(co);
+  ok(api.getBeltFrom() === null, 'tapping the same machine again cancels');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 11400);

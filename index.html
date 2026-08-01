@@ -866,6 +866,7 @@ const solved = {};
 let ents = [], links = [], nextId = 1;
 let tool = 'select', pickedType = null, pickedRecipe = null, pickedRot = 0, beltTier = 1;
 let selected = null, result = null, plannerOn = false;
+let beltFrom = null;      /* first machine tapped while the Belt card is armed */
 /* The factory never stops. clockT is a monotonic clock; editT marks the last
    topology change; steadyAt is when the pipeline will have physically filled.
    A level is completed by holding quota for HOLD_REQUIRED seconds after that,
@@ -2451,9 +2452,24 @@ function buildTray() {
   nb.onclick = () => editDesign(newDesign());
   el.appendChild(nb);
 
-  /* Belt tiers are not cards. A tier is a property of a belt rather than a thing you
-     place, so new belts start at Mk1 and are upgraded by tapping the belt — which is
-     also precisely the lesson level 3 exists to teach. */
+  /* Belts belong in the tray. Taking them out was a mistake: dragging from a machine
+     works, but with no card and no tool nothing in the interface said belts existed, and
+     an invisible gesture is the same as a missing feature. The card arms a tap-then-tap
+     mode for players who never find the drag; the drag keeps working with no mode. */
+  for (const t of L.belts) {
+    const tier = BELTS.find((b) => b.id === t);
+    const card = document.createElement('button');
+    card.className = 'card' + (tool === 'belt' && beltTier === t ? ' on' : '');
+    card.innerHTML = '<div class="bar" style="background:#' + tier.color.toString(16).padStart(6, '0') + '"></div>'
+      + '<div class="cn">Belt ' + tier.name + '</div>'
+      + '<div class="cr">' + tier.cap + '/min<br>tap 2 machines</div>';
+    card.onclick = () => {
+      if (tool === 'belt' && beltTier === t) setTool('select');
+      else { beltTier = t; beltFrom = null; setTool('belt'); }
+      buildTray();
+    };
+    el.appendChild(card);
+  }
 }
 
 /* Only two modes remain, and one of them is entered by picking something to place. */
@@ -2461,6 +2477,7 @@ function setTool(t) {
   tool = t;
   stroke = null;
   if (t !== 'place') { pickedType = null; pickedRecipe = null; pickedDesign = null; }
+  if (t !== 'belt') beltFrom = null;
   clear(gGhost);
   refreshRotate();
 }
@@ -2510,7 +2527,7 @@ function updateHold(met, prog) {
 function refreshHint() {
   const base = L.hint || '';
   const needsBelt = links.length === 0 && ents.filter((e) => MACHINES[e.type].kind !== 'sink').length > 0;
-  const verb = 'Drag from a machine\u2019s blue arrow to lay a belt.';
+  const verb = 'Drag from a machine\u2019s blue arrow, or pick a Belt card and tap two machines.';
   $('#lvHint').textContent = (needsBelt && base.indexOf('rag from') === -1) ? base + ' ' + verb : base;
 }
 
@@ -2970,10 +2987,11 @@ cv.addEventListener('pointerup', (ev) => {
   if (painting) {
     clear(gGhost);
     if (moved < 9) {
-      /* never moved: treat it as a tap on the machine instead of a failed belt */
-      const src = stroke.fromEnt;
+      /* Never moved, so it was a tap. Hand it to handleTap rather than deciding here:
+         a tap means "select" normally but "pick the source" while the Belt card is
+         armed, and duplicating that choice in two places is how they drift apart. */
       stroke = null;
-      selected = src; buildMachines(); showInspector(src);
+      if (g) handleTap(g, ev.clientX, ev.clientY);
       rebaseGesture();
       return;
     }
@@ -3061,6 +3079,26 @@ function afterPlace() {
   buildTray();
 }
 
+/* Lay a belt from two taps by synthesising the stroke a drag would have produced, so
+   both routes end in exactly the same routing and validation code. */
+function connectByTap(a, b) {
+  const item = outItemOf(a);
+  const pe = portError(a, b, item);
+  if (pe) { toast(pe); return false; }
+  const aPort = freeOutPort(a), bPort = freeInPort(b, item);
+  if (aPort < 0 || bPort < 0) { toast('No free port for that.'); return false; }
+  const pa = portsOf(a).out[aPort], pb = portsOf(b).in[bPort];
+  const raw = [];
+  for (let t = 0; t <= 1.0001; t += 0.1) {
+    raw.push({ x: pa.x + (pb.x - pa.x) * t, z: pa.z + (pb.z - pa.z) * t });
+  }
+  const before = links.length;
+  stroke = { fromEnt: a, fromPort: aPort, pts: raw };
+  commitStroke(raw, pb, b);
+  stroke = null;
+  return links.length > before;
+}
+
 function placeAt(g) {
   if (!pickedType || !MACHINES[pickedType]) return;   /* nothing armed */
   if (pickedType === 'termIn' || pickedType === 'termOut') {
@@ -3099,6 +3137,24 @@ function placeAt(g) {
 
 function handleTap(g, cx, cy) {
   if (tool === 'place' && pickedType) { placeAt(g); return; }
+
+  if (tool === 'belt') {
+    const e = machineAtScreen(cx, cy) || entAt(g);
+    if (!e) { toast('Tap a machine to start the belt.'); return; }
+    if (!beltFrom) {
+      if (freeOutPort(e) < 0) return toast(MACHINES[e.type].name + ' has no free output port.');
+      beltFrom = e;
+      selected = e; buildMachines(); showInspector(null);
+      toast('Now tap where it should go.');
+      return;
+    }
+    if (e === beltFrom) { beltFrom = null; deselect(); return; }
+    const made = connectByTap(beltFrom, e);
+    beltFrom = null;
+    deselect();
+    if (made) { setTool('select'); buildTray(); }
+    return;
+  }
 
   const e = machineAtScreen(cx, cy) || entAt(g);
   if (e) { selected = e; buildMachines(); showInspector(e); refreshRotate(); return; }
@@ -3189,7 +3245,7 @@ addEventListener('resize', layoutCamera);
 addEventListener('keydown', (ev) => {
   if (ev.key !== 'Escape') return;
   closeMenu();
-  if (tool === 'place') { setTool('select'); buildTray(); }
+  if (tool === 'place' || tool === 'belt') { setTool('select'); buildTray(); deselect(); }
   else deselect();
 });
 

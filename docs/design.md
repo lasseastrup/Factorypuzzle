@@ -318,7 +318,7 @@ These are genuinely in tension: the ore-optimal solution usually needs more mach
 | Zoom | pinch |
 | Turn the view | two-finger twist, snapping to 90° on release |
 | Inspect | tap a machine or a belt |
-| **Paint a belt** | **drag from one machine to another** |
+| **Paint a belt** | **drag from one machine to another**, or pick a Belt card and tap the two machines |
 | Place a machine | pick a card, drag on the plot, release to commit |
 | Cancel a pick | tap the armed card again, or Escape |
 | Deselect | tap bare ground, the inspector's close control, or Escape |
@@ -334,7 +334,11 @@ The rest went by relocation rather than deletion. Rotate appears only when there
 
 **Two persistent controls remain:** a rates toggle, and the tray of things you can place.
 
-**A gesture has to be advertised where it is performed.** Removing the Belt cards and the Paint belt tool in the same pass left nothing anywhere in the interface indicating that belts existed — painting worked perfectly and nothing said so, which is indistinguishable from the feature having been removed. Three cues fix it without reintroducing a mode: an unused output port carries a slowly bobbing arrow, the hint line names the verb until the player has laid their first belt in that context, and dragging off a machine whose output is already taken says so rather than silently panning. The general rule: deleting a control also deletes the only place the interface explained itself, and the explanation has to be re-homed.
+**Belts keep a card, and that was a correction.** They were taken out of the tray on the reasoning that a belt tier is a property of a belt rather than a thing you place. Tidy, and wrong: with no card and no tool, nothing in the interface said belts existed at all, and an invisible gesture is indistinguishable from a missing feature. A card is now the *primary* way in, arming a tap-the-source-then-tap-the-target mode; the drag keeps working for anyone who finds it. Both routes end in exactly the same routing and validation code, so a tapped belt is as orthogonal as a dragged one.
+
+Three further cues, none of which need a mode: an unused output port carries a slowly bobbing arrow, the hint line names the verb until the player has laid their first belt in that context, and dragging off a machine whose output is already taken says so rather than silently panning.
+
+The general rule worth keeping: **deleting a control also deletes the only place the interface explained itself.** Counting buttons removed is not the same as counting affordances lost.
 
 **Arming is never sticky.** Placing something returns to the neutral state. Leaving the tool armed after a placement meant every later drag laid another blueprint instead of moving the camera, which reads as the view being stuck rather than as a mode being active — a mode with no visible border is indistinguishable from a bug. One extra tap to place a second machine is much the cheaper cost. For the same reason a card is a toggle, so arming can always be undone without placing anything.
 
