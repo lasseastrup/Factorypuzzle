@@ -161,7 +161,9 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'refreshRotate',
   'clearPlot',
   'toggleMenu',
-  'deselect'];
+  'deselect',
+  'depotCap',
+  'connectByTap'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
@@ -1602,3 +1604,47 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 11400);
+
+/* --- the depot cap, which is what makes "one belt out" a real constraint --- */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- depot belt cap ---');
+
+  /* level 6 accepts a single belt */
+  const idx = api.LEVELS.findIndex((l) => l.id === 'Plant');
+  api.loadLevel(idx);
+  const lv = api.LEVELS[idx];
+  ok(lv.depotPorts === 1, 'the smelting plant accepts one belt');
+
+  const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
+  const a = api.addEntity('smelter', 8, 4, 1);
+  const b = api.addEntity('smelter', 8, 12, 1);
+  api.resolve();
+  ok(api.freeInPort(depot, 'ingot') === 0, 'the first belt has a port');
+  const made1 = api.connectByTap(a, depot);
+  ok(made1, 'and connects');
+  ok(api.freeInPort(depot, 'ingot') < 0, 'the second has none');
+  const made2 = api.connectByTap(b, depot);
+  ok(!made2, 'so a second belt is refused');
+  ok(/accepts 1 belt/i.test(api.getToast()), `and says why (${JSON.stringify(api.getToast())})`);
+
+  /* a level with a looser cap allows more */
+  const bIdx = api.LEVELS.findIndex((l) => l.id === 'Balance');
+  api.loadLevel(bIdx);
+  ok(api.LEVELS[bIdx].depotPorts === 3, 'the balancing level accepts three');
+  const dp2 = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
+  const sm = [0, 1, 2, 3].map((i) => api.addEntity('smelter', 8, 4 + i * 4, 1));
+  api.resolve();
+  let made = 0;
+  for (const s of sm) if (api.connectByTap(s, dp2)) made++;
+  ok(made === 3, `exactly three belts land (${made})`);
+
+  /* levels without a cap keep the default */
+  api.loadLevel(0);
+  ok(!api.LEVELS[0].depotPorts, 'early levels declare no cap');
+  ok(api.depotCap() === 4, `and default to four (${api.depotCap()})`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 11900);

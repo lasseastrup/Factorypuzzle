@@ -1,6 +1,8 @@
-# RATIO — Game Design Document (v0.8)
+# RATIO — Game Design Document (v0.9)
 
 *Working title. Alternatives: Throughput, Feedstock, Assembly Line, Per Minute.*
+
+**v0.9:** five new levels covering volume, manifolds, forced balancing and factory reuse; the Depot can be capped to N belts (§8.3b, §8.4).
 
 **v0.8:** the control surface is gestures and cards — thirteen persistent buttons down to two (§10).
 
@@ -283,14 +285,39 @@ Multi-output levels are also **how the game manufactures good modules.** A one-i
 
 
 
+### 8.3b Manifolds and balancers
+
+Two ways to feed N machines from one supply, and the design question of which the game rewards.
+
+- A **manifold** runs one trunk past every machine, each tapping off with a splitter. Trivial to build, extends by copy-paste, needs no arithmetic.
+- A **balancer** splits the supply evenly upstream, so every machine gets an equal share immediately.
+
+**At steady state with adequate supply they are indistinguishable.** Both run every machine at 100% and deliver identical totals — verified against the solver. A manifold self-corrects because once the trunk is saturated each machine draws only what it consumes. So a quota measured on totals cannot tell them apart, and any level claiming to teach the difference has to find another lever. There are exactly three:
+
+1. **Warm-up.** A manifold fills from the near end, so the far machines idle for a while. Irrelevant here, because verification measures delivered items over a window rather than instantaneous rates.
+2. **Distribution under scarcity.** Short the supply and a manifold favours whoever is nearest — 100/50/25/25 in a four-smelter test where a balancer gives 50/50/50/50. Total output is the same. Usable only by a quota on *several* products drawn from one scarce trunk, and it forces machines below 100%, which fights pillar 1.
+3. **Belt capacity.** This is the usable one. A manifold's trunk must carry the *entire* combined throughput; a balancer's branches each carry only their share. So restricting belt tiers makes a manifold physically impossible.
+
+Hence the pair: **The manifold** (§8.4, level 7) hands the player Mk3 and a long corridor, where a trunk is both possible and obviously the neat answer. **Balanced load** (level 8) gives Mk1 only and asks for 180/min, where no single belt can carry the load and the split has to happen at the source. One level is taught by shape, the other enforced by physics.
+
+**A supporting mechanic:** a level may cap how many belts the Depot accepts. That is what lets a level ask for its output on one high-speed belt — the merge has to happen inside the factory rather than being spread across four lines into the wall. It is a cheap constraint that produces real layout pressure.
+
 ### 8.4 Act structure (v1)
 
-| Act | Ladder rungs (§8.2) | Teaches | Ends on |
-|---|---|---|---|
-| Tutorial (5 levels) | 1 | placement, belts, 1:1 ratios, machine states | first non-1:1 ratio |
-| Act 1 (12 levels) | 1–2 | belt caps, splitters/mergers, 2-input assembly, first module reuse | Reinforced Plate |
-| Act 2 (15 levels) | 3–5 | second ore, multi-output, shared nodes and intermediates, byproducts, fluids | a 2-output module used downstream |
-| Act 3 (12 levels) | 6–7 | coprime balancers, nested outputs, tight plots, "build this using only modules" | endgame item |
+| # | Level | Teaches |
+|---|---|---|
+| 1 | First ingots | placement, painting a belt, 1:1 ratios |
+| 2 | Plate line | a non-1:1 ratio, inspecting a machine |
+| 3 | Ninety screws | belt capacity, and upgrading a belt to fix it |
+| 4 | Reinforced plate | two inputs, one output port per machine, two parallel lines |
+| 5 | Two products, one node | splitters: one supply divided between two products |
+| 6 | Smelting plant | volume — a splitter tree to four smelters, merged onto one belt |
+| 7 | The manifold | one fast trunk tapped along its length |
+| 8 | Balanced load | Mk1 only, so the load must be split at the source |
+| 9 | Three of a kind | build a factory once, place three copies |
+| 10 | Reinforced line | two modules at volume; the finale |
+
+Beyond ten, the ladder continues into byproducts (§5.6), fluids (§5.7) and nesting.
 
 **Sandbox mode:** unbounded plot, all tech, no quota. Ships after the campaign, not with the prototype. It's the retention layer, but it can't carry the tutorialisation.
 

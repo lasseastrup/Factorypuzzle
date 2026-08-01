@@ -253,6 +253,56 @@ const LEVELS = [
     quota: { plate: 20, rod: 30 },
     tech: ['miner', 'smelter', 'constructor', 'splitter', 'merger'], belts: [1, 2],
     par: { machines: 5, belt: 34, ore: 60 } },
+  { id: 'Plant', name: 'Smelting plant', rung: 4,
+    hint: '120 ore a minute into four smelters, and the Depot takes ONE belt \u2014 so merge before you deliver. A good candidate for a factory.',
+    w: 23, h: 17,
+    nodes: [{ x: 3, z: 4.5, rate: 60 }, { x: 3, z: 12.5, rate: 60 }],
+    depot: { x: 20, z: 8.5 }, depotPorts: 1,
+    rocks: [{ x: 8.5, z: 8.5, r: 0.8 }, { x: 15, z: 2.5, r: 0.7 }, { x: 15, z: 14.5, r: 0.7 }],
+    quota: { ingot: 120 },
+    tech: ['miner', 'smelter', 'splitter', 'merger'], belts: [1, 2],
+    par: { machines: 6, belt: 58, ore: 120 } },
+
+  { id: 'Manifold', name: 'The manifold', rung: 4,
+    hint: 'Six smelters along one corridor. Run a single fast trunk past them all and tap it with Splitters \u2014 Mk3 carries 240/min. Depot takes two belts.',
+    w: 31, h: 12,
+    nodes: [{ x: 3, z: 3, rate: 60 }, { x: 3, z: 6, rate: 60 }, { x: 3, z: 9, rate: 60 }],
+    depot: { x: 28, z: 6 }, depotPorts: 2,
+    rocks: [{ x: 12, z: 1.2, r: 0.7 }, { x: 20, z: 10.8, r: 0.7 }],
+    quota: { ingot: 180 },
+    tech: ['miner', 'smelter', 'splitter', 'merger'], belts: [1, 2, 3],
+    par: { machines: 9, belt: 96, ore: 180 } },
+
+  { id: 'Balance', name: 'Balanced load', rung: 6,
+    hint: 'Mk1 belts only. No single belt can carry 180/min, so split at the source and keep every line under 60. Two smelters per merger.',
+    w: 25, h: 19,
+    nodes: [{ x: 3, z: 4, rate: 60 }, { x: 3, z: 9.5, rate: 60 }, { x: 3, z: 15, rate: 60 }],
+    depot: { x: 21, z: 9.5 }, depotPorts: 3,
+    rocks: [{ x: 11, z: 2, r: 0.75 }, { x: 11, z: 17, r: 0.75 }, { x: 16, z: 9.5, r: 0.7 }],
+    quota: { ingot: 180 },
+    tech: ['miner', 'smelter', 'splitter', 'merger'], belts: [1],
+    par: { machines: 9, belt: 82, ore: 180 } },
+
+  { id: 'Triple', name: 'Three of a kind', rung: 5,
+    hint: 'Three identical ore-to-plate blocks. Build one factory, then place three copies of it. 90 ore in, 60 plates out on one belt.',
+    w: 23, h: 17,
+    nodes: [{ x: 3, z: 5, rate: 60 }, { x: 3, z: 12, rate: 30 }],
+    depot: { x: 19, z: 8.5 }, depotPorts: 1,
+    rocks: [{ x: 9, z: 8.5, r: 0.8 }, { x: 14, z: 3, r: 0.7 }, { x: 14, z: 14, r: 0.7 }],
+    quota: { plate: 60 },
+    tech: ['miner', 'smelter', 'constructor', 'splitter', 'merger'], belts: [1, 2],
+    par: { machines: 8, belt: 70, ore: 90 } },
+
+  { id: 'Reinf20', name: 'Reinforced line', rung: 7,
+    hint: 'One module turns 60 ore into 10 reinforced plates. You need two. Build it once, place it twice \u2014 and mind the 90 screws a minute inside.',
+    w: 27, h: 21,
+    nodes: [{ x: 3, z: 5, rate: 60 }, { x: 3, z: 16, rate: 60 }],
+    depot: { x: 23, z: 10.5 }, depotPorts: 2,
+    rocks: [{ x: 13, z: 1.5, r: 0.8 }, { x: 13, z: 19.5, r: 0.8 }, { x: 18, z: 10.5, r: 0.75 }],
+    quota: { reinf: 20 },
+    tech: ['miner', 'smelter', 'constructor', 'assembler', 'splitter', 'merger'], belts: [1, 2],
+    par: { machines: 14, belt: 132, ore: 120 } },
+
 ];
 
 const MACHINE_COLOR = {
@@ -351,6 +401,11 @@ function boxOf(e, inflate) {
 }
 const boxesOverlap = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
 const inBox = (p, b) => p.x >= b.x0 && p.x <= b.x1 && p.z >= b.z0 && p.z <= b.z1;
+
+/* How many belts the Depot accepts on this level. Capping it at one is what lets a
+   level ask for its output on a single high-speed belt: the merge has to happen in the
+   factory rather than being spread across four lines into the wall. */
+const depotCap = () => (L && L.depotPorts) || 4;
 
 function inPlot(e) {
   const b = boxOf(e);
@@ -942,6 +997,7 @@ function freeOutPort(e) {
 function freeInPort(e, item) {
   const P = portsOf(e);
   const used = links.filter((l) => l.to === e.id).map((l) => (l.slotTo == null ? l.toPort : l.slotTo));
+  if (MACHINES[e.type].kind === 'sink' && used.length >= depotCap()) return -1;
   for (let i = 0; i < P.in.length; i++) {
     if (used.includes(i)) continue;
     const want = P.inItems[i];
@@ -971,6 +1027,10 @@ function portError(a, b, item) {
     if (item && !r.in[item]) return db.name + ' has no use for ' + ITEMS[item].name + '.';
   }
   if (freeInPort(b, item) < 0) {
+    if (db.kind === 'sink') {
+      const n = depotCap();
+      return 'The Depot accepts ' + n + ' belt' + (n === 1 ? '' : 's') + ' here — merge your lines first.';
+    }
     if (db.kind === 'merger') return 'That merger is full — three inputs is the limit.';
     if (db.kind === 'splitter') return 'A splitter takes one input. Use a merger to combine lines.';
     return item ? 'The ' + ITEMS[item].name + ' port is already taken.' : 'All input ports are taken.';
@@ -2040,6 +2100,14 @@ function showInspector(e) {
   let html = '<button class="inspClose" data-act="close">&times;</button>'
     + '<h4>' + ((def.kind === 'factory' && e.def && e.def.name) || def.name)
     + (r && def.recipes.length > 1 ? ' · ' + r.label : '') + '</h4>';
+  if (def.kind === 'sink') {
+    const n = depotCap(), used = links.filter((l) => l.to === e.id).length;
+    html += '<div class="row"><span>Accepts</span><span>' + used + ' / ' + n + ' belt' + (n === 1 ? '' : 's') + '</span></div>';
+    for (const [item, rate] of Object.entries(L.quota || {})) {
+      const got = (result && result.output && result.output[item]) || 0;
+      html += '<div class="row"><span>' + ITEMS[item].short + '</span><span>' + fmt(got) + ' / ' + rate + '/min</span></div>';
+    }
+  }
   if (def.kind === 'factory') {
     const fp = factoryPorts(e);
     html += '<div class="row"><span>Ports</span><span>' + fp.in.length + ' in / ' + fp.out.length + ' out</span></div>';
