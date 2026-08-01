@@ -115,10 +115,14 @@ const body = blocks[blocks.length-1];
 /* expose internals for poking after boot */
 const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet','LEVELS','MACHINES','groundAt','handleTap','portsOf','freeOutPort','commitStroke','beltMetres','computeCrossings','entAt','setTool','frame','score','updateLabels',
   'simplify','chaikin','resample','minRadius','segHit','routeBlocked','arcTable','MIN_RADIUS','canPlace',
-  'sun','renderer','animateMachines','updateStatus','buildStatus','gMachines','BELT_TEX','BELT_SPEED',
-  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS','smoothPath','buildPath','smoothToRadius','MIN_RADIUS','SMOOTH_CAPS','ribbon','BELT_HW','RAIL_HW','BELT_TEX_PERIOD','gBelts','arcTable','advanceBelts','beltHasRoom','queuedOn','JAM_SPACING','itemMeshes','updateItems','roomy','resolveFlow'];
+  'sun','renderer','animateMachines','gMachines','BELT_TEX','BELT_SPEED',
+  'portsOf','localPorts','machineYaw','buildMachines','setZoom','cameraIsSane','resetView','machineAtScreen','PITCH_STEPS','smoothPath','buildPath','smoothToRadius','MIN_RADIUS','SMOOTH_CAPS','ribbon','BELT_HW','RAIL_HW','BELT_TEX_PERIOD','gBelts','arcTable','advanceBelts','beltHasRoom','queuedOn','JAM_SPACING','itemMeshes','updateItems','roomy','resolveFlow',
+  'ghostAt',
+  'placeAt',
+  'gGhost'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
+  + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
   + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, getHold: function(){return deliveryProgress().worst;}, getClock: function(){return clockT;}, getDeliveries: function(){return deliveries.length;}, isReported: function(){return reported;}, DELIVER_WINDOW: DELIVER_WINDOW, deliveryProgress: function(){return deliveryProgress();}, rateMet: function(){return rateMet();}, solvedMap: function(){return solved;}, setPlanner: function(v){plannerOn=v;},'
@@ -913,3 +917,58 @@ setTimeout(() => {
   ok(Math.abs(gap - 2.0) < 1e-9, `and 30/min is still exactly one item every ${gap.toFixed(2)} s`);
   console.log(`\n${p} passed, ${f} failed`);
 }, 6900);
+
+/* --- placing commits on lift, and shows where belts will attach --- */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- blueprint placement ---');
+
+  api.loadLevel(1);
+  const before = api.ents().length;
+  const cv = api.renderer.domElement;
+  api.setTool('place');
+  globalThis.__pick('smelter', 'ingot');
+
+  /* aim at a spot known to be clear, rather than arbitrary pixels */
+  const THREE2 = require('three');
+  const toScreen = (wx, wz) => {
+    const v = new THREE2.Vector3(wx, 0, wz).project(api.camera);
+    return { x: (v.x * 0.5 + 0.5) * 390, y: (-v.y * 0.5 + 0.5) * 844 };
+  };
+  const a = toScreen(6, 3.5), b = toScreen(6.6, 3.9);
+  cv.fire('pointerdown', { pointerId: 1, clientX: a.x, clientY: a.y });
+  ok(api.gGhost.children.length > 0, 'a blueprint appears as soon as the finger goes down');
+  ok(api.ents().length === before, 'and nothing is placed yet');
+
+  const ghost = api.gGhost.children[0];
+  const ports = ghost.children.filter((c) => c.isMesh && c.geometry.type === 'BoxGeometry').length;
+  ok(ports >= 3, `the blueprint shows the body plus its port markers (${ports} boxes)`);
+  ok(ghost.children.some((c) => c.geometry && c.geometry.type === 'ConeGeometry'),
+    'the output port is marked with a direction arrow');
+
+  cv.fire('pointermove', { pointerId: 1, clientX: b.x, clientY: b.y });
+  ok(api.gGhost.children.length > 0, 'the blueprint follows the finger');
+  ok(api.ents().length === before, 'still nothing placed while dragging');
+
+  cv.fire('pointerup', { pointerId: 1, clientX: b.x, clientY: b.y });
+  ok(api.ents().length === before + 1, 'the machine is placed when the finger lifts');
+  ok(api.gGhost.children.length === 0, 'and the blueprint is cleared');
+
+  /* the placed machine's ports must be where the blueprint said they were */
+  const placed = api.ents()[api.ents().length - 1];
+  ok(placed && placed.type === 'smelter', `and it is the machine that was picked (${placed && placed.type})`);
+  const lp = api.localPorts(placed);
+  ok(lp.out.length === 1 && lp.in.length === 1, 'a smelter has one input and one output port');
+  const pw = api.portsOf(placed).out[0];
+  ok(Math.hypot(pw.x - placed.x, pw.z - placed.z) > 0.4,
+    'its output port sits on the footprint edge, not at the centre');
+
+  /* no status lamps left. Checked precisely rather than by counting spheres — the
+     smelter's steam puff is legitimately a sphere. */
+  const lamps = api.gMachines.children.filter((gr) => gr.userData.anim && gr.userData.anim.lamp).length;
+  ok(lamps === 0, `no machine carries a status lamp (${lamps})`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 7400);

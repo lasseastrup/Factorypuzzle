@@ -1517,48 +1517,20 @@ function buildMachines() {
       }
     }
 
-    /* status lamp, on a short mast so it clears the body */
-    if (def.kind === 'machine' || def.kind === 'miner') {
-      const ly = LAMP_Y[e.type] || 1.2;
-      part(g, new THREE.CylinderGeometry(0.035, 0.035, 0.3, 6), MAT(DARK), -w / 2 + 0.2, ly - 0.15, d / 2 - 0.24, false);
-      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.115, 10, 8),
-        new THREE.MeshBasicMaterial({ color: 0x8b8f8a }));
-      lamp.position.set(-w / 2 + 0.2, ly + 0.04, d / 2 - 0.24);
-      lamp.visible = false;
-      g.add(lamp);
-      anim.lamp = lamp;
-    }
-
     g.userData.anim = anim;
     g.userData.ent = e;
     gMachines.add(g);
   }
 }
 
-/* ---- status lamps ----
-   These replace the rings that used to sit on the ground under every machine.
-   The rings read the efficiency arc at a glance but dominated the picture, and
-   there were as many big circles as machines. A small lamp on the machine keeps
-   the state visible — green running, amber starved, orange throttled, red
-   blocked — while the exact percentage lives in the planner overlay and the
-   inspector, which is where a number belongs anyway. */
-const LAMP_Y = { miner: 2.05, smelter: 2.05, constructor: 1.62, assembler: 1.05 };
-function buildStatus() { /* lamps are created with the machine bodies */ }
-
-function updateStatus() {
-  for (const g of gMachines.children) {
-    const e = g.userData.ent;
-    const lamp = g.userData.anim && g.userData.anim.lamp;
-    if (!e || !lamp) continue;
-    const live = isLive(e);
-    lamp.visible = live;
-    if (!live) continue;
-    lamp.material.color.setHex(STATE_COLOR[e.state] || 0x8b8f8a);
-  }
-}
-/* kept under the old names so callers do not have to care */
-const buildRings = buildStatus;
-const updateRings = updateStatus;
+/* Machine state was shown by a ring on the floor, then by a lamp on a mast. Both
+   are gone at the player's request. What remains is quieter and arguably better: a
+   machine animates at a speed proportional to its actual rate, so a starved one
+   visibly labours and a blocked one stands still. Exact figures live in the planner
+   overlay and the inspector, and belts show their own backlog.
+   Kept as no-ops so callers do not have to care. */
+function buildStatus() {}
+function updateStatus() {}
 
 /* ---- conveyor geometry ----
    The belt surface carries a scrolling chevron texture. Because visual belt speed
@@ -1926,7 +1898,7 @@ function scheduleSpinUp(prev) {
   }
 }
 const isLive = (e) => isFinite(e.startT) && clockT >= e.startT;
-function buildAll() { buildMachines(); buildBelts(); buildRings(); }
+function buildAll() { buildMachines(); buildBelts(); }
 
 function beltMetres() { let s = 0; for (const l of links) s += l.length; return s; }
 
@@ -2315,7 +2287,18 @@ cv.addEventListener('pointerdown', (ev) => {
   }
   dragStart = { x: ev.clientX, y: ev.clientY };
   panStart.copy(camCenter);
+
   const g = groundAt(ev.clientX, ev.clientY);
+
+  /* Placing follows the finger and commits on lift, so the player sees exactly where
+     a machine will land — and where its ports will be — before letting go. Touch has
+     no hover, so a preview that only appeared on mouse-move was useless on a phone. */
+  if (tool === 'place' && pickedType && g) {
+    dragMode = 'ghost';
+    ghostAt(ev.clientX, ev.clientY);
+    return;
+  }
+
   if (tool === 'belt' && g) {
     /* begin a stroke at the nearest free output port */
     let bestE = null, bestP = -1, bd = SNAP_RADIUS * SNAP_RADIUS;
@@ -2356,6 +2339,10 @@ cv.addEventListener('pointermove', (ev) => {
   const dx = ev.clientX - dragStart.x, dy = ev.clientY - dragStart.y;
   moved = Math.max(moved, Math.hypot(dx, dy));
 
+  if (dragMode === 'ghost') {
+    ghostAt(ev.clientX, ev.clientY);
+    return;
+  }
   if (dragMode === 'paint' && stroke) {
     const g = groundAt(ev.clientX, ev.clientY);
     if (!g) return;
@@ -2385,6 +2372,7 @@ cv.addEventListener('pointerup', (ev) => {
   /* a pinch must never end up counting as a tap: re-baselining resets `moved`, so
      without this flag lifting the last finger would place a machine */
   const wasTap = !pinched && moved < 9 && pointers.size === 1 && dragMode !== 'pinch';
+  const placing = dragMode === 'ghost';
   const painting = dragMode === 'paint' && stroke;
   const g = groundAt(ev.clientX, ev.clientY);
   pointers.delete(ev.pointerId);
@@ -2394,6 +2382,12 @@ cv.addEventListener('pointerup', (ev) => {
     else toast('Drag from one machine to another to lay a belt.');
     stroke = null;
     if (!pointers.size) { dragMode = null; pinched = false; }
+    return;
+  }
+  if (placing) {
+    clear(gGhost);
+    if (g) placeAt(g);
+    rebaseGesture();
     return;
   }
   if (wasTap && g) handleTap(g, ev.clientX, ev.clientY);
@@ -2424,15 +2418,16 @@ function drawStrokePreview() {
   if (g) gGhost.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55, side: THREE.DoubleSide })));
 }
 
+function placeAt(g) {
+  const err = canPlace(pickedType, g.x, g.z, pickedRot);
+  if (err) return toast(err);
+  const e = addEntity(pickedType, g.x, g.z, pickedRot);
+  if (pickedRecipe) e.recipe = pickedRecipe;
+  resolve();
+}
+
 function handleTap(g, cx, cy) {
-  if (tool === 'place' && pickedType) {
-    const err = canPlace(pickedType, g.x, g.z, pickedRot);
-    if (err) return toast(err);
-    const e = addEntity(pickedType, g.x, g.z, pickedRot);
-    if (pickedRecipe) e.recipe = pickedRecipe;
-    resolve();
-    return;
-  }
+  if (tool === 'place' && pickedType) { placeAt(g); return; }
   if (tool === 'erase') {
     const e = machineAtScreen(cx, cy) || entAt(g);
     if (e && MACHINES[e.type].kind !== 'sink') { removeEntity(e); computeCrossings(); resolve(); return; }
@@ -2450,19 +2445,51 @@ function handleTap(g, cx, cy) {
 function ghostAt(cx, cy) {
   clear(gGhost);
   const g = groundAt(cx, cy);
-  if (!g) return;
+  if (!g || !pickedType) return;
   const err = canPlace(pickedType, g.x, g.z, pickedRot);
-  const probe = { type: pickedType, x: g.x, z: g.z, rot: pickedRot };
-  const b = boxOf(probe);
-  const m = new THREE.Mesh(new THREE.BoxGeometry(b.ex * 2, 0.6, b.ez * 2),
-    new THREE.MeshBasicMaterial({ color: err ? 0xc2402f : 0x2f9e6f, transparent: true, opacity: 0.34 }));
-  m.position.set(g.x, 0.3, g.z);
-  gGhost.add(m);
-  const dir = DIRS[pickedRot % 4];
-  const nib = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.3, 0.34),
-    new THREE.MeshBasicMaterial({ color: 0x1b2124, transparent: true, opacity: 0.6 }));
-  nib.position.set(g.x + dir[0] * b.ez, 0.4, g.z + dir[1] * b.ez);
-  gGhost.add(nib);
+  const probe = { type: pickedType, x: g.x, z: g.z, rot: pickedRot, recipe: pickedRecipe };
+  const def = MACHINES[pickedType];
+  const ok = !err;
+  const tint = ok ? 0x2f9e6f : 0xc2402f;
+
+  const grp = new THREE.Group();
+  grp.position.set(g.x, 0, g.z);
+  grp.rotation.y = machineYaw(probe);
+
+  /* translucent volume plus a footprint outline: reads as a blueprint rather than a
+     solid object that is already there */
+  const body = new THREE.Mesh(new THREE.BoxGeometry(def.w, 0.55, def.h),
+    new THREE.MeshBasicMaterial({ color: tint, transparent: true, opacity: 0.2 }));
+  body.position.y = 0.28;
+  grp.add(body);
+  const hx = def.w / 2, hz = def.h / 2;
+  const outline = [-hx, 0.03, -hz, hx, 0.03, -hz, hx, 0.03, hz, -hx, 0.03, hz, -hx, 0.03, -hz];
+  const og = new THREE.BufferGeometry();
+  og.setAttribute('position', new THREE.Float32BufferAttribute(outline, 3));
+  grp.add(new THREE.Line(og, new THREE.LineBasicMaterial({ color: ok ? 0x1b5b41 : 0x7d2318 })));
+
+  /* the ports, because they are what the player is actually aiming. Belts snap to
+     these exact points, so their positions decide whether a spot works. */
+  const P = localPorts(probe);
+  for (const p of P.out) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.2, 0.3),
+      new THREE.MeshBasicMaterial({ color: 0x1b2124 }));
+    m.position.set(p.x, 0.3, p.z);
+    grp.add(m);
+    const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.32, 4),
+      new THREE.MeshBasicMaterial({ color: 0x1b2124 }));
+    arrow.position.set(p.x, 0.3, p.z + 0.34);
+    arrow.rotation.x = -Math.PI / 2;
+    grp.add(arrow);
+  }
+  P.in.forEach((p, i) => {
+    const item = P.inItems[i];
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.18, 0.28),
+      new THREE.MeshBasicMaterial({ color: item ? ITEMS[item].color : 0xf0eee5 }));
+    m.position.set(p.x, 0.28, p.z);
+    grp.add(m);
+  });
+  gGhost.add(grp);
 }
 
 document.querySelectorAll('.tbtn[data-tool]').forEach((b) => b.onclick = () => setTool(b.dataset.tool));
@@ -2595,7 +2622,6 @@ function frame(now) {
     showReport(true);
   }
 
-  updateStatus();
   /* The surface must scroll at exactly the speed items travel, or the belt looks
      like it is slipping under its own cargo. One period of texture is
      BELT_TEX_PERIOD metres, so offset advances BELT_SPEED / period per second. */
