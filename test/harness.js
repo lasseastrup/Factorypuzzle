@@ -178,7 +178,9 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'nearestFreeSpot',
   'orientPair',
   'beltAt',
-  'isJunction'];
+  'isJunction',
+  'layBelt',
+  'straightRaw'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
@@ -2593,3 +2595,103 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 17400);
+
+/* --- one belt-laying path, whatever the gesture ---
+   A drag from a machine, two taps, and a branch spliced off a belt must all go through the
+   same router and the same validation. A branch briefly had its own path that auto-routed a
+   straight line and discarded the shape the player drew. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- one way to lay a belt ---');
+
+  const axisFraction = (pts) => {
+    let axis = 0, total = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x, dz = pts[i].z - pts[i - 1].z;
+      const len = Math.hypot(dx, dz);
+      if (len < 1e-9) continue;
+      total += len;
+      const a = Math.atan2(Math.abs(dz), Math.abs(dx));
+      if (a < 0.052 || a > Math.PI / 2 - 0.052) axis += len;
+    }
+    return total ? axis / total : 0;
+  };
+
+  /* Built inside a factory interior: it has walls but no rocks, so a route that fails can
+     only mean the router failed rather than my chosen corridor clipping scenery. Three
+     earlier versions of tests in this file were defeated by exactly that. */
+  api.loadLevel(5);
+  const design = api.newDesign('Routing');
+  api.editDesign(design);
+  /* The feed terminal is created once. clearPlot deliberately keeps terminals, so calling it
+     between builds stacked a second one on top of the first and blocked every route. */
+  const feed = api.addEntity('termIn', 1, 5, 1);
+  feed.wall = 'w'; feed.index = 0;
+  const build = () => {
+    for (const e of api.ents().slice()) if (e !== feed) api.removeEntityById(e.id);
+    const s1 = api.addEntity('smelter', 10, 2, 1);
+    const s2 = api.addEntity('smelter', 10, 8, 1);
+    api.resolve();
+    api.armBelt(1);
+    api.connectByTap(feed, s1);
+    api.resolve();
+    return { m: feed, s1, s2, trunk: api.links()[0] };
+  };
+
+  /* a branch drawn with a deliberate detour must KEEP that shape */
+  const b = build();
+  const from = b.trunk.path[Math.floor(b.trunk.path.length / 2)];
+  const drawn = [];
+  for (let t = 0; t <= 1.0001; t += 0.05) {
+    /* an L-shaped detour: down first, then across */
+    drawn.push(t < 0.5
+      ? { x: from.x, z: from.z + (b.s2.z - from.z) * (t / 0.5) }
+      : { x: from.x + (b.s2.x - from.x) * ((t - 0.5) / 0.5), z: b.s2.z });
+  }
+  ok(api.spliceJunction(b.trunk, from, b.s2, drawn), 'a branch can be drawn off a belt');
+  api.resolve();
+  const j = api.ents().find((e) => e.type === 'junction');
+  const branch = api.links().find((l) => l.from === j.id && l.to === b.s2.id);
+  ok(!!branch, 'the branch belt exists');
+
+  /* the drawn detour goes down THEN across, so the path must reach the target's z well
+     before it reaches the target's x. A straight auto-route would not. */
+  if (branch) {
+    /* Measured against the belt's own endpoint, not the machine's centre: a belt attaches to
+       the perimeter, so the centre is a metre away and was never reached. */
+    const end = branch.path[branch.path.length - 1];
+    const reachZ = branch.path.findIndex((q) => Math.abs(q.z - end.z) < 0.4);
+    const reachX = branch.path.findIndex((q) => Math.abs(q.x - end.x) < 0.4);
+    ok(reachZ >= 0 && reachX >= 0 && reachZ < reachX,
+      `the branch follows the drawn detour, down before across (z at ${reachZ}, x at ${reachX})`);
+    ok(axisFraction(branch.path) > 0.6,
+      `and is routed orthogonally like any other belt (${(axisFraction(branch.path) * 100).toFixed(0)}%)`);
+    ok(api.minRadius(branch.path) >= api.MIN_RADIUS * 0.95,
+      `with corners held to the same radius (${api.minRadius(branch.path).toFixed(2)})`);
+  }
+
+  /* all three belts of the splice carry proper routing data, not stubs */
+  const all = api.links();
+  ok(all.every((l) => l.arc && l.arc.length === l.path.length && l.length > 0),
+    'every belt from the splice has a full arc table');
+  ok(all.every((l) => l.slotFrom != null && l.slotTo != null),
+    'and recorded port slots, exactly as a hand-drawn belt does');
+
+  /* a branch to somewhere impossible must fail the same way a hand-drawn belt does */
+  const b2 = build();
+  const before = api.links().length;
+  ok(!api.spliceJunction(b2.trunk, b2.trunk.path[1], b2.m, null),
+    'branching back into the belt\u2019s own source is refused');
+  ok(api.links().length === before, 'and nothing is left half-done');
+
+  /* the tap route is the same code with a straight line for the shape */
+  const b3 = build();
+  const n0 = api.links().length;
+  ok(api.connectByTap(b3.s1, b3.s2) === false || api.links().length === n0 + 1,
+    'connectByTap either lays one belt or none, with no side effects');
+  api.exitContext();
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 17900);

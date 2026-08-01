@@ -1985,17 +1985,72 @@ function finishStroke(raw, a, aPort, b, bPort) {
   return ortho;   /* commitStroke reports why it will not fit */
 }
 
+/* ---- laying one belt ----
+   The single place a belt is created. Every route into it — a drag from a machine, two taps,
+   or a branch spliced off an existing belt — arrives here with a source, a destination and
+   the shape the player drew, and gets the same routing, the same validation and the same
+   failure messages. There was briefly a second path for branches which auto-routed a
+   straight line and threw away the drawn shape; nothing good comes of a game having two
+   ways to make the same object. */
+function layBelt(a, b, raw, aPortHint) {
+  if (!a || !b || a === b) return false;
+
+  /* If it was drawn the wrong way round, turn it round rather than refusing, and reverse
+     the path so the belt still follows what was drawn. */
+  let src = a, dst = b, path0 = raw || [];
+  if (portError(src, dst, outItemOf(src))) {
+    if (!portError(dst, src, outItemOf(dst))) {
+      src = b; dst = a;
+      path0 = path0.slice().reverse();
+      toast('Connected ' + MACHINES[src.type].name + ' \u2192 ' + MACHINES[dst.type].name);
+    } else {
+      toast(portError(a, b, outItemOf(a)) || 'Those cannot be connected.');
+      return false;
+    }
+  }
+
+  const item = outItemOf(src);
+  const bPort = freeInPort(dst, item);
+  const aPort = (src === a && aPortHint != null) ? aPortHint : Math.max(0, freeOutPort(src));
+  if (bPort < 0 || aPort < 0) { toast('No free port for that.'); return false; }
+
+  const pts = finishStroke(path0, src, aPort, dst, bPort);
+  const blocked = routeBlocked(pts, src, dst);
+  if (blocked) { toast(blocked); return false; }
+  const arc = arcTable(pts);
+  const len = arc[arc.length - 1];
+  if (len < 0.4) { toast('Too short to be a belt.'); return false; }
+
+  const tier = BELTS.find((t) => t.id === beltTier) || BELTS[0];
+  /* For a factory the port slot and the terminal index are different things: slots are
+     ordered for the UI, indices identify the terminal inside. */
+  const fp = MACHINES[src.type].kind === 'factory' ? (factoryPorts(src).outIdx[aPort] || 0) : aPort;
+  const tp = MACHINES[dst.type].kind === 'factory' ? (factoryPorts(dst).inIdx[bPort] || 0) : bPort;
+  links.push({ id: 'l' + (nextId++), from: src.id, to: dst.id, fromPort: fp, toPort: tp,
+               slotFrom: aPort, slotTo: bPort,
+               cap: tier.cap, tier: tier.id, path: pts, arc, length: len, bumps: [] });
+  return true;
+}
+
+/* A straight line between two things, for when the player did not draw a shape. */
+function straightRaw(a, b) {
+  const E = beltEnds(a, 0, b, 0, null);
+  const out = [];
+  for (let t = 0; t <= 1.0001; t += 0.1) {
+    out.push({ x: E.pa.x + (E.pb.x - E.pa.x) * t, z: E.pa.z + (E.pb.z - E.pa.z) * t });
+  }
+  return out;
+}
+
 function commitStroke(raw, endPoint, pickedEnd) {
-  /* started on a belt: splice a junction rather than laying a belt from nowhere */
+  /* started on a belt: splice a junction, and the drawn shape becomes the new branch */
   if (stroke.fromBelt) {
     const target = pickedEnd || entAt(endPoint);
     if (!target) { toast('Drag from a belt to a machine to branch it.'); return; }
-    spliceJunction(stroke.fromBelt, stroke.at, target);
+    spliceJunction(stroke.fromBelt, stroke.at, target, raw);
     return;
   }
   const a = stroke.fromEnt;
-  const item = outItemOf(a);
-  /* find the target: whatever machine the stroke ended on or nearest to */
   let b = (pickedEnd && pickedEnd !== a) ? pickedEnd : entAt(endPoint);
   if (!b) {
     let best = null, bd = SNAP_RADIUS * SNAP_RADIUS;
@@ -2013,43 +2068,20 @@ function commitStroke(raw, endPoint, pickedEnd) {
        branching, and the same operation — the junction sorts out which way each belt runs. */
     const onto = beltAt(endPoint);
     if (onto && onto.from !== a.id && onto.to !== a.id) {
-      spliceJunction(onto, endPoint, a);
+      spliceJunction(onto, endPoint, a, raw);
       return;
     }
     return toast('End the stroke on a machine, or on another belt.');
   }
-  /* If the stroke was drawn the wrong way round, turn it round rather than refusing. The
-     path itself is reversed so the belt still follows what was drawn. */
-  let src = a, dst = b, path0 = raw;
-  if (portError(src, dst, outItemOf(src))) {
-    if (!portError(dst, src, outItemOf(dst))) {
-      src = b; dst = a;
-      path0 = raw.slice().reverse();
-      toast('Connected ' + MACHINES[src.type].name + ' \u2192 ' + MACHINES[dst.type].name);
-    } else {
-      return toast(portError(a, b, item));
-    }
+  if (layBelt(a, b, raw, stroke.fromPort)) {
+    computeCrossings();
+    resolve();
+    const l = links[links.length - 1];
+    toast('Belt ' + (BELTS.find((t) => t.id === l.tier) || BELTS[0]).name + ' · ' + l.length.toFixed(1) + ' m');
   }
-  const item2 = outItemOf(src);
-  const bPort = freeInPort(dst, item2), aPort = src === a ? stroke.fromPort : Math.max(0, freeOutPort(src));
-  const pts = finishStroke(path0, src, aPort, dst, bPort);
-  const blocked = routeBlocked(pts, src, dst);
-  if (blocked) return toast(blocked);
-  const arc = arcTable(pts);
-  const len = arc[arc.length - 1];
-  if (len < 0.4) return toast('Too short to be a belt.');
-  const tier = BELTS.find((t) => t.id === beltTier) || BELTS[0];
-  /* For a factory the port slot and the terminal index are different things: slots
-     are ordered for the UI, indices identify the terminal inside. */
-  const fp = MACHINES[src.type].kind === 'factory' ? (factoryPorts(src).outIdx[aPort] || 0) : aPort;
-  const tp = MACHINES[dst.type].kind === 'factory' ? (factoryPorts(dst).inIdx[bPort] || 0) : bPort;
-  links.push({ id: 'l' + (nextId++), from: src.id, to: dst.id, fromPort: fp, toPort: tp,
-               slotFrom: aPort, slotTo: bPort,
-               cap: tier.cap, tier: tier.id, path: pts, arc, length: len, bumps: [] });
-  computeCrossings();
-  resolve();
-  toast('Belt ' + tier.name + ' · ' + len.toFixed(1) + ' m');
 }
+
+
 
 /* Where two belts cross, the later one ramps over. This is what the third
    dimension is for (§5.2). */
@@ -3722,25 +3754,33 @@ cv.addEventListener('wheel', (ev) => {
   setZoom(zoom * (1 + Math.sign(ev.deltaY) * 0.09));
 }, { passive: false });
 
+/* The translucent belt shown while dragging. Both preview cases go through this, so a
+   branch previews exactly like any other belt. */
+function previewRibbon(pts, bad) {
+  const fake = { path: pts, arc: arcTable(pts), tier: beltTier, bumps: [] };
+  const g = ribbon([fake], (l, c) => c.setHex(bad ? 0xc2402f : 0x2f9e6f));
+  return g ? new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.55, side: THREE.DoubleSide })) : null;
+}
+
 function drawStrokePreview() {
   clear(gGhost);
   if (stroke.fromBelt) {
-    /* show where the junction will land, and a straight indication of the new run */
+    /* Preview the branch through the real router, so what is shown is what lands. The
+       junction does not exist yet, so a probe stands in for it — and a second probe stands in
+       for the finger when it is not yet over a machine. Both are junction-shaped, which means
+       both ends resolve to points and the route comes out exactly as it will. */
     const spot = nearestFreeSpot('junction', stroke.at.x, stroke.at.z);
+    if (!spot) return;
     const tip = stroke.pts[stroke.pts.length - 1] || stroke.at;
-    const grp = new THREE.Group();
-    if (spot) {
-      const box = new THREE.Mesh(new THREE.BoxGeometry(1, 0.4, 1),
-        new THREE.MeshBasicMaterial({ color: 0x2f6f8f, transparent: true, opacity: 0.3 }));
-      box.position.set(spot.x, 0.2, spot.z);
-      grp.add(box);
-    }
-    const from = spot || stroke.at;
-    const lg = new THREE.BufferGeometry();
-    lg.setAttribute('position', new THREE.Float32BufferAttribute(
-      [from.x, BELT_Y, from.z, tip.x, BELT_Y, tip.z], 3));
-    grp.add(new THREE.Line(lg, new THREE.LineBasicMaterial({ color: 0x2f6f8f })));
-    gGhost.add(grp);
+    const probeSrc = { id: '_pj', type: 'junction', x: spot.x, z: spot.z, rot: 0 };
+    const target = entAt(tip) || { id: '_pt', type: 'junction', x: tip.x, z: tip.z, rot: 0 };
+    let pts = null;
+    try { pts = buildOrthoPath(stroke.pts, probeSrc, 0, target, 0); } catch (err) { pts = null; }
+    if (!pts || pts.length < 2) return;
+    const bad = !!routeBlocked(pts, probeSrc, target);
+    const geo = previewRibbon(pts, bad);
+    if (geo) gGhost.add(geo);
     return;
   }
   const a = stroke.fromEnt;
@@ -3759,10 +3799,9 @@ function drawStrokePreview() {
     pts = resample(filletCorners(rectilinear(mergeCollinear([start, stubA].concat(mid)), stroke.pts), MIN_RADIUS), RESAMPLE);
   }
   if (!pts || pts.length < 2) return;
-  const bad = routeBlocked(pts, a, entAt(pts[pts.length - 1]));
-  const fake = { path: pts, arc: arcTable(pts), tier: beltTier, bumps: [] };
-  const g = ribbon([fake], (l, c) => c.setHex(bad ? 0xc2402f : 0x2f9e6f));
-  if (g) gGhost.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55, side: THREE.DoubleSide })));
+  const bad = !!routeBlocked(pts, a, entAt(pts[pts.length - 1]));
+  const geo = previewRibbon(pts, bad);
+  if (geo) gGhost.add(geo);
 }
 
 /* Terminals belong on a wall, so a tap anywhere snaps to the nearest one and slides
@@ -3849,7 +3888,7 @@ function nearestFreeSpot(type, x, z) {
   return base;
 }
 
-function spliceJunction(link, at, other) {
+function spliceJunction(link, at, other, raw) {
   const src = entById(link.from), dst = entById(link.to);
   if (!src || !dst) return false;
   if (other === src || other === dst) { toast('That is already on this belt.'); return false; }
@@ -3868,9 +3907,23 @@ function spliceJunction(link, at, other) {
   const j = addEntity('junction', spot.x, spot.z, 0);
   const prevTier = beltTier;
   beltTier = tier;
-  const ok1 = connectByTap(src, j);
-  const ok2 = ok1 && connectByTap(j, dst);
-  const ok3 = ok2 && !!orientPair(j, other) && connectByTap(j, other);
+
+  /* The two halves of the original run were not drawn by anyone, so they are routed
+     straight. The new branch WAS drawn, so it keeps its shape — through the same router,
+     the same validation and the same failure messages as any other belt. */
+  const ok1 = layBelt(src, j, straightRaw(src, j), null);
+  const ok2 = ok1 && layBelt(j, dst, straightRaw(j, dst), null);
+  let ok3 = false;
+  if (ok2) {
+    const pair = orientPair(j, other);
+    if (pair) {
+      let shape = (raw && raw.length > 1) ? raw.slice() : straightRaw(pair[0], pair[1]);
+      /* the stroke was drawn away from the belt; if the branch turns out to run INTO the
+         junction, the shape has to run that way too */
+      if (pair[0] === other) shape = shape.slice().reverse();
+      ok3 = layBelt(pair[0], pair[1], shape, null);
+    }
+  }
   beltTier = prevTier;
 
   if (!ok3) {
@@ -3901,24 +3954,18 @@ function orientPair(a, b) {
 
 /* Lay a belt from two taps by synthesising the stroke a drag would have produced, so
    both routes end in exactly the same routing and validation code. */
+/* Two taps, which is just layBelt with a straight line for the shape. */
 function connectByTap(a0, b0) {
   const pair = orientPair(a0, b0);
   if (!pair) { toast(portError(a0, b0, outItemOf(a0)) || 'Those cannot be connected.'); return false; }
-  const a = pair[0], b = pair[1];
-  if (a !== a0) toast('Connected ' + MACHINES[a.type].name + ' \u2192 ' + MACHINES[b.type].name);
-  const item = outItemOf(a);
-  const aPort = freeOutPort(a), bPort = freeInPort(b, item);
-  if (aPort < 0 || bPort < 0) { toast('No free port for that.'); return false; }
-  const E0 = beltEnds(a, aPort, b, bPort, null);
-  const raw = [];
-  for (let t = 0; t <= 1.0001; t += 0.1) {
-    raw.push({ x: E0.pa.x + (E0.pb.x - E0.pa.x) * t, z: E0.pa.z + (E0.pb.z - E0.pa.z) * t });
+  const made = layBelt(pair[0], pair[1], straightRaw(pair[0], pair[1]), null);
+  if (made) {
+    computeCrossings();
+    resolve();
+    const l = links[links.length - 1];
+    toast('Belt ' + (BELTS.find((t) => t.id === l.tier) || BELTS[0]).name + ' · ' + l.length.toFixed(1) + ' m');
   }
-  const before = links.length;
-  stroke = { fromEnt: a, fromPort: aPort, pts: raw };
-  commitStroke(raw, E0.pb, b);
-  stroke = null;
-  return links.length > before;
+  return made;
 }
 
 function placeAt(g) {
