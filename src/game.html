@@ -994,17 +994,48 @@ function freeOutPort(e) {
   return -1;
 }
 /* which input port accepts this item? */
+/* Which items are already arriving here. Resolved from a belt's actual contents where
+   the line has run, and from the source's recipe otherwise. */
+function inboundItems(e, exclude) {
+  const set = new Set();
+  for (const l of links) {
+    if (l.to !== e.id || l === exclude) continue;
+    const it = l.item || outItemOf(entById(l.from));
+    if (it) set.add(it);
+  }
+  return set;
+}
+
 function freeInPort(e, item) {
   const P = portsOf(e);
-  const used = links.filter((l) => l.to === e.id).map((l) => (l.slotTo == null ? l.toPort : l.slotTo));
-  if (MACHINES[e.type].kind === 'sink' && used.length >= depotCap()) return -1;
-  for (let i = 0; i < P.in.length; i++) {
-    if (used.includes(i)) continue;
-    const want = P.inItems[i];
-    /* item === null means "not known yet", which is normal when painting out of a
-       terminal or a factory that has not run. Refusing every port in that case made
-       a factory interior impossible to wire at all. */
-    if (want == null || item == null || want === item) return i;
+  const def = MACHINES[e.type];
+  const inbound = links.filter((l) => l.to === e.id);
+  const slots = inbound.map((l) => (l.slotTo == null ? l.toPort : l.slotTo));
+
+  if (def.kind === 'sink') {
+    return inbound.length >= depotCap() ? -1 : Math.min(inbound.length, P.in.length - 1);
+  }
+
+  /* Untyped inputs — splitters, mergers, factory terminals — accept whatever arrives, so
+     for them a slot really is a position, claimed first come first served. */
+  const typed = P.inItems.some((x) => x != null);
+  if (!typed) {
+    for (let i = 0; i < P.in.length; i++) if (!slots.includes(i)) return i;
+    return -1;
+  }
+
+  /* Typed inputs: what matters is one belt per required item, not which slot index it
+     happened to claim. Claiming by position became wrong the moment attachment stopped
+     being positional — a screw belt whose item was not yet known, arriving from a merger
+     with nothing upstream, would claim slot 0, the PLATE slot, and plates were then
+     refused as already taken even though none were arriving. */
+  const taken = inboundItems(e);
+  if (item) {
+    const i = P.inItems.indexOf(item);
+    return (i < 0 || taken.has(item)) ? -1 : i;
+  }
+  for (let i = 0; i < P.inItems.length; i++) {
+    if (!taken.has(P.inItems[i]) && !slots.includes(i)) return i;
   }
   return -1;
 }
@@ -1033,7 +1064,8 @@ function portError(a, b, item) {
     }
     if (db.kind === 'merger') return 'That merger is full — three inputs is the limit.';
     if (db.kind === 'splitter') return 'A splitter takes one input. Use a merger to combine lines.';
-    return item ? 'The ' + ITEMS[item].name + ' port is already taken.' : 'All input ports are taken.';
+    if (item && inboundItems(b).has(item)) return 'A belt is already delivering ' + ITEMS[item].name + ' here.';
+    return item ? db.name + ' cannot take more ' + ITEMS[item].name + '.' : 'All inputs are fed.';
   }
   return null;
 }
@@ -1904,6 +1936,7 @@ function resolve() {
   const root = rootContext();
   result = solveNested({ entities: root.ents, links: root.links }, {}, { roomy });
   applyViewResults(result);
+  repairInputSlots();
   scheduleSpinUp(prev);
   editT = clockT;
   /* When the last belt actually finishes filling, using the shifted schedule. A
@@ -2698,6 +2731,21 @@ function afterPlace() {
   showInspector(null);
   setTool('select');
   buildTray();
+}
+
+/* Once a belt's contents are known, record the matching slot so the inspector and any
+   later port arithmetic agree with what is actually being delivered. */
+function repairInputSlots() {
+  for (const l of links) {
+    const dest = entById(l.to);
+    if (!dest) continue;
+    const P = portsOf(dest);
+    if (!P.inItems || !P.inItems.some((x) => x != null)) continue;
+    const it = l.item || outItemOf(entById(l.from));
+    if (!it) continue;
+    const i = P.inItems.indexOf(it);
+    if (i >= 0) { l.toPort = i; l.slotTo = i; }
+  }
 }
 
 /* Lay a belt from two taps by synthesising the stroke a drag would have produced, so

@@ -166,7 +166,9 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'connectByTap',
   'beltEnds',
   'attachOn',
-  'snapPlacement'];
+  'snapPlacement',
+  'inboundItems',
+  'repairInputSlots'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
@@ -1741,3 +1743,69 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 12400);
+
+/* --- a two-input machine must accept both its inputs, in any order, from any source ---
+   An assembler needs plates AND screws. A belt whose contents were not yet known — from a
+   merger with nothing upstream, a splitter, or a factory that had not run — used to claim
+   the FIRST input slot, which is the plate slot, and plates were then refused as already
+   taken even though none were arriving. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- two-input machines ---');
+
+  api.loadLevel(3);
+  const build = () => {
+    api.clearPlot();
+    const asm = api.addEntity('assembler', 12, 9, 0);
+    const cp = api.addEntity('constructor', 5, 4, 0); cp.recipe = 'plate';
+    const cs = api.addEntity('constructor', 5, 13, 0); cs.recipe = 'screw';
+    api.resolve();
+    return { asm, cp, cs };
+  };
+
+  /* both orders must work */
+  let s = build();
+  ok(api.connectByTap(s.cp, s.asm), 'plates connect first');
+  ok(api.connectByTap(s.cs, s.asm), 'then screws');
+
+  s = build();
+  ok(api.connectByTap(s.cs, s.asm), 'screws connect first');
+  ok(api.connectByTap(s.cp, s.asm), `then plates (${JSON.stringify(api.getToast())})`);
+
+  /* the reported case: the screw side arrives through a merger with nothing upstream yet */
+  s = build();
+  const mg = api.addEntity('merger', 8, 13, 0);
+  api.resolve();
+  ok(api.outItemOf(mg) === null, 'an unfed merger carries nothing identifiable');
+  ok(api.connectByTap(mg, s.asm), 'it can still be wired to the assembler');
+  ok(api.connectByTap(s.cp, s.asm),
+    `and plates are still accepted afterwards (${JSON.stringify(api.getToast())})`);
+
+  /* Once the merger is fed, the belt's contents become identifiable and the recorded
+     slots must line up with what each belt actually carries. Checked from the sources'
+     recipes rather than from flow: these constructors have no ore behind them, so
+     nothing is moving, which is correct and beside the point here. */
+  ok(api.connectByTap(s.cs, mg), 'screws feed the merger');
+  api.resolve();
+  ok(api.outItemOf(mg) === 'screw', `the merger now identifiably carries screws (${api.outItemOf(mg)})`);
+  const ins = api.links().filter((l) => l.to === s.asm.id);
+  ok(ins.length === 2, `the assembler has exactly two inbound belts (${ins.length})`);
+  const slotOf = (item) => api.portsOf(s.asm).inItems.indexOf(item);
+  const bySrc = {};
+  for (const l of ins) bySrc[api.outItemOf(api.ents().find((e) => e.id === l.from))] = l;
+  ok(!!bySrc.plate && !!bySrc.screw, `one belt per item (${Object.keys(bySrc).join(', ')})`);
+  ok(bySrc.plate && bySrc.plate.slotTo === slotOf('plate'),
+    `the plate belt is recorded on the plate slot (${bySrc.plate && bySrc.plate.slotTo} = ${slotOf('plate')})`);
+  ok(bySrc.screw && bySrc.screw.slotTo === slotOf('screw'),
+    `the screw belt on the screw slot (${bySrc.screw && bySrc.screw.slotTo} = ${slotOf('screw')})`);
+
+  /* a second belt of the SAME item must still be refused */
+  const cp2 = api.addEntity('constructor', 5, 7, 0); cp2.recipe = 'plate';
+  api.resolve();
+  ok(!api.connectByTap(cp2, s.asm), 'a second plate belt is refused');
+  ok(/already delivering/.test(api.getToast()), `with a message that says why (${JSON.stringify(api.getToast())})`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 12900);
