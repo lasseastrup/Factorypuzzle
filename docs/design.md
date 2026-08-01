@@ -320,6 +320,8 @@ These are genuinely in tension: the ore-optimal solution usually needs more mach
 | Inspect | tap a machine or a belt |
 | **Paint a belt** | **drag from one machine to another** |
 | Place a machine | pick a card, drag on the plot, release to commit |
+| Cancel a pick | tap the armed card again, or Escape |
+| Deselect | tap bare ground, the inspector's close control, or Escape |
 | Rotate | the one floating control, shown only while placing or with something selected |
 | Remove | inspect it, then Remove |
 | Upgrade a belt | tap the belt |
@@ -331,6 +333,8 @@ Three of those tools described something the hand already says. Painting a belt 
 The rest went by relocation rather than deletion. Rotate appears only when there is something to rotate. View rotation became the twist gesture. Score is reached by tapping the progress bar, which is where a player already looks. Level selection and Clear moved into a menu behind the level title — and Clear in particular is better off the main surface, since there is still no undo. Belt tiers left the tray entirely: a tier is a property of a belt, not a thing you place, so belts start at Mk1 and are upgraded by tapping them, which is exactly what level 3 teaches.
 
 **Two persistent controls remain:** a rates toggle, and the tray of things you can place.
+
+**Arming is never sticky.** Placing something returns to the neutral state. Leaving the tool armed after a placement meant every later drag laid another blueprint instead of moving the camera, which reads as the view being stuck rather than as a mode being active — a mode with no visible border is indistinguishable from a bug. One extra tap to place a second machine is much the cheaper cost. For the same reason a card is a toggle, so arming can always be undone without placing anything.
 
 Camera is orthographic at a **fixed 54° above the horizon**. (Three tilt steps were prototyped; 54° won on a phone — shallower looked better in stills but tall machines began hiding belts behind them.) Yaw snaps to 90°; there is no free orbit, which would destroy the readability of belt paths and make drag-to-place ambiguous.
 

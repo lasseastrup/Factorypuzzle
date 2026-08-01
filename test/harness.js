@@ -160,13 +160,14 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'buildLevelBar',
   'refreshRotate',
   'clearPlot',
-  'toggleMenu'];
+  'toggleMenu',
+  'deselect'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
   + '\n;globalThis.__pickDesign = function (d) { pickedType = "factory"; pickedDesign = d; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
-  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, getSelected: function(){return selected;}, selectNothing: function(){selected=null;showInspector(null);refreshRotate();}, rotVisible: function(){return document.getElementById("rotBtn").classList.contains("show");}, trayLabels: function(){return Array.from(document.querySelector("#trayScroll").children).map(function(c){return c.innerHTML;});}, menuHtml: function(){return document.getElementById("menu").innerHTML||"";}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
+  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, getSelected: function(){return selected;}, getTool: function(){return tool;}, getPicked: function(){return pickedType;}, select: function(e){selected=e;buildMachines();showInspector(e);refreshRotate();}, armCard: function(t,r){ if(pickedType===t && pickedRecipe===(r||null)) setTool("select"); else {pickedType=t;pickedRecipe=r||null;pickedDesign=null;setTool("place");} buildTray(); }, selectNothing: function(){selected=null;showInspector(null);refreshRotate();}, rotVisible: function(){return document.getElementById("rotBtn").classList.contains("show");}, trayLabels: function(){return Array.from(document.querySelector("#trayScroll").children).map(function(c){return c.innerHTML;});}, menuHtml: function(){return document.getElementById("menu").innerHTML||"";}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, getHold: function(){return deliveryProgress().worst;}, getClock: function(){return clockT;}, getDeliveries: function(){return deliveries.length;}, isReported: function(){return reported;}, DELIVER_WINDOW: DELIVER_WINDOW, deliveryProgress: function(){return deliveryProgress();}, rateMet: function(){return rateMet();}, solvedMap: function(){return solved;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
@@ -1061,6 +1062,8 @@ setTimeout(() => {
   globalThis.__pickDesign(d);
   const lv = api.LEVELS[1];
   api.placeAt({ x: 6, z: 3 });
+  globalThis.__pickDesign(d);          /* placing disarms, so arm again for the second */
+  api.setTool('place');
   api.placeAt({ x: 13, z: 3 });
   const boxes = api.ents().filter((e) => e.type === 'factory');
   ok(boxes.length === 2, 'two instances placed from one design');
@@ -1151,11 +1154,13 @@ setTimeout(() => {
   const n1 = api.ents().length;
   api.placeAt({ x: c.w - 0.4, z: 2 });
   ok(api.ents().length === n1 + 1, 'an Output can be placed as well');
+  ok(api.getTool() === 'select', 'and placing it disarmed the card');
 
   /* and the box outside shows one port per terminal */
   api.exitContext();
   api.setTool('place');
   globalThis.__pickDesign(d);
+  api.setTool('place');
   api.placeAt({ x: 7, z: 7 });
   const box = api.ents().filter((e) => e.type === 'factory').pop();
   ok(!!box, 'the design can be placed in the level');
@@ -1362,3 +1367,67 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 9900);
+
+/* --- placing must not leave the camera stuck ---
+   The place tool stayed armed after a placement, so every later drag laid another
+   blueprint instead of panning. Selection was never the problem; the armed card was. */
+setTimeout(() => {
+  const THREE2 = require('three');
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- arming and deselecting ---');
+
+  api.loadLevel(1);
+  const cv = api.renderer.domElement;
+  const toScreen = (wx, wz) => {
+    const v = new THREE2.Vector3(wx, 0, wz).project(api.camera);
+    return { x: (v.x * 0.5 + 0.5) * 390, y: (-v.y * 0.5 + 0.5) * 844 };
+  };
+
+  /* arm, place, and confirm the tool disarms itself */
+  globalThis.__pick('smelter', 'ingot');
+  api.setTool('place');
+  const spot = toScreen(6, 3.5);
+  const n0 = api.ents().length;
+  cv.fire('pointerdown', { pointerId: 1, clientX: spot.x, clientY: spot.y });
+  cv.fire('pointerup', { pointerId: 1, clientX: spot.x, clientY: spot.y });
+  ok(api.ents().length === n0 + 1, 'the machine is placed');
+  ok(api.getTool() === 'select', `and the tool disarms itself (${api.getTool()})`);
+  ok(api.getPicked() == null, 'with nothing left armed');
+  ok(!api.rotVisible(), 'the Turn control goes away too');
+
+  /* the very next drag on empty ground must pan */
+  const before = api.getCam();
+  const empty = toScreen(3, 12);
+  cv.fire('pointerdown', { pointerId: 1, clientX: empty.x, clientY: empty.y });
+  cv.fire('pointermove', { pointerId: 1, clientX: empty.x + 70, clientY: empty.y + 30 });
+  const after = api.getCam();
+  cv.fire('pointerup', { pointerId: 1, clientX: empty.x + 70, clientY: empty.y + 30 });
+  ok(Math.hypot(after.x - before.x, after.z - before.z) > 0.2,
+    'the camera moves immediately after placing');
+  ok(api.ents().length === n0 + 1, 'and no second machine appears');
+
+  /* a card is a toggle, so arming can be undone without placing anything */
+  api.armCard('smelter', 'ingot');
+  ok(api.getTool() === 'place', 'tapping a card arms it');
+  api.armCard('smelter', 'ingot');
+  ok(api.getTool() === 'select', 'tapping the same card disarms it');
+  ok(api.getPicked() == null, 'and clears what was armed');
+
+  /* selecting then deselecting frees the camera as well */
+  const m = api.ents().find((e) => e.type === 'smelter');
+  api.select(m);
+  ok(api.getSelected() === m, 'a machine can be selected');
+  api.deselect();
+  ok(api.getSelected() === null, 'and deselected');
+
+  /* tapping bare ground clears a selection too */
+  api.select(m);
+  const bare = toScreen(3, 12);
+  cv.fire('pointerdown', { pointerId: 1, clientX: bare.x, clientY: bare.y });
+  cv.fire('pointerup', { pointerId: 1, clientX: bare.x, clientY: bare.y });
+  ok(api.getSelected() === null, 'tapping bare ground clears the selection');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 10400);

@@ -71,7 +71,9 @@
   #insp{position:fixed;left:10px;bottom:116px;z-index:11;width:218px;background:var(--panel);
     border:1px solid var(--line);border-radius:7px;padding:10px 11px;display:none;
     box-shadow:0 8px 22px rgba(20,26,30,.18)}
-  #insp h4{margin:0 0 5px;font:600 11.5px/1.2 var(--ui)}
+  #insp h4{margin:0 0 5px;font:600 11.5px/1.2 var(--ui);padding-right:18px}
+  .inspClose{position:absolute;top:5px;right:6px;width:22px;height:22px;border:0;background:none;
+    font-size:17px;line-height:1;color:#8b8f8a;cursor:pointer;border-radius:4px;padding:0}
   #insp .row{display:flex;justify-content:space-between;font-family:var(--mono);
     font-size:10px;padding:2px 0;border-bottom:1px dotted #c9c5b6}
   #insp .row:last-of-type{border:0}
@@ -2377,7 +2379,13 @@ function buildTray() {
       card.innerHTML = '<div class="bar" style="background:#' + MACHINE_COLOR[type].toString(16).padStart(6, '0') + '"></div>'
         + '<div class="cn">' + (r && def.recipes.length > 1 ? r.label : def.name) + '</div>'
         + '<div class="cr">' + ins + '<br>&#8595; ' + outs + '</div>';
-      card.onclick = () => { pickedType = type; pickedRecipe = r ? r.id : null; setTool('place'); buildTray(); };
+      card.onclick = () => {
+        /* tapping the armed card puts it back, so arming is never a trap */
+        const same = pickedType === type && pickedRecipe === (r ? r.id : null);
+        if (same) setTool('select');
+        else { pickedType = type; pickedRecipe = r ? r.id : null; pickedDesign = null; setTool('place'); }
+        buildTray();
+      };
       el.appendChild(card);
     }
   }
@@ -2389,7 +2397,11 @@ function buildTray() {
       card.innerHTML = '<div class="bar" style="background:#'
         + (type === 'termIn' ? '4d7a4f' : '7a4d4d') + '"></div>'
         + '<div class="cn">' + label + '</div><div class="cr">' + sub + '</div>';
-      card.onclick = () => { pickedType = type; pickedRecipe = null; pickedDesign = null; setTool('place'); buildTray(); };
+      card.onclick = () => {
+        if (pickedType === type) setTool('select');
+        else { pickedType = type; pickedRecipe = null; pickedDesign = null; setTool('place'); }
+        buildTray();
+      };
       el.appendChild(card);
     }
   }
@@ -2404,7 +2416,11 @@ function buildTray() {
     card.innerHTML = '<div class="bar" style="background:#4a5b63"></div>'
       + '<div class="cn">' + d.name + '</div>'
       + '<div class="cr">' + pin + ' in / ' + pout + ' out<br>' + n + ' machine' + (n === 1 ? '' : 's') + '</div>';
-    card.onclick = () => { pickedType = 'factory'; pickedDesign = d; pickedRecipe = null; setTool('place'); buildTray(); };
+    card.onclick = () => {
+      if (pickedDesign === d) setTool('select');
+      else { pickedType = 'factory'; pickedDesign = d; pickedRecipe = null; setTool('place'); }
+      buildTray();
+    };
     const del = document.createElement('span');
     del.className = 'cardDel';
     del.textContent = '\u00d7';
@@ -2438,6 +2454,15 @@ function setTool(t) {
 
 /* Rotate is the one control that has to float, and it appears only when there is
    something to rotate. */
+/* One place that clears the current selection, so the inspector's close control, a tap
+   on bare ground and the Escape key cannot drift apart. */
+function deselect() {
+  selected = null;
+  buildMachines();
+  showInspector(null);
+  refreshRotate();
+}
+
 function refreshRotate() {
   const b = $('#rotBtn');
   const rotatable = (tool === 'place' && pickedType && MACHINES[pickedType].kind !== 'pass')
@@ -2520,7 +2545,8 @@ function showInspector(e) {
   const box = $('#insp');
   if (!e) { box.style.display = 'none'; refreshRotate(); return; }
   const def = MACHINES[e.type], r = recipeOf(e);
-  let html = '<h4>' + ((def.kind === 'factory' && e.def && e.def.name) || def.name)
+  let html = '<button class="inspClose" data-act="close">&times;</button>'
+    + '<h4>' + ((def.kind === 'factory' && e.def && e.def.name) || def.name)
     + (r && def.recipes.length > 1 ? ' · ' + r.label : '') + '</h4>';
   if (def.kind === 'factory') {
     const fp = factoryPorts(e);
@@ -2570,6 +2596,7 @@ function showInspector(e) {
   box.innerHTML = html;
   box.style.display = 'block';
   box.querySelectorAll('button').forEach((b) => b.onclick = () => {
+    if (b.dataset.act === 'close') { deselect(); return; }
     if (b.dataset.act === 'enter') { enterFactory(e); return; }
     if (b.dataset.act === 'save') {
       const copy = JSON.parse(JSON.stringify(e.def || { w: INTERIOR_W, h: INTERIOR_H, entities: [], links: [] }));
@@ -2598,7 +2625,8 @@ function showInspector(e) {
 function showBeltInspector(l) {
   const box = $('#insp');
   const tier = BELTS.find((b) => b.id === l.tier);
-  let html = '<h4>Belt ' + tier.name + '</h4>'
+  let html = '<button class="inspClose" data-act="close">&times;</button>'
+    + '<h4>Belt ' + tier.name + '</h4>'
     + '<div class="row"><span>Capacity</span><span>' + l.cap + '/min</span></div>'
     + '<div class="row"><span>Length</span><span>' + l.length.toFixed(1) + ' m</span></div>';
   if (l.bumps.length) html += '<div class="row"><span>Crossings</span><span>' + l.bumps.length + ' over</span></div>';
@@ -2615,6 +2643,7 @@ function showBeltInspector(l) {
   box.innerHTML = html;
   box.style.display = 'block';
   box.querySelectorAll('button').forEach((b) => b.onclick = () => {
+    if (b.dataset.act === 'close') { deselect(); return; }
     if (b.dataset.act === 'del') dropWhere(links, (x) => x === l);
     else { const t = +b.dataset.tier; l.tier = t; l.cap = BELTS.find((x) => x.id === t).cap; }
     selected = null; showInspector(null); computeCrossings(); resolve();
@@ -2991,7 +3020,18 @@ function snapToWall(x, z, type) {
   return { wall: 'e', x: L.w - depth, z: clampZ, rot: 3 };
 }
 
+/* Placing returns to the neutral state. Leaving the tool armed meant every drag after
+   a placement laid another blueprint instead of moving the camera, which reads as the
+   view being stuck. One extra tap to place a second machine is the cheaper cost. */
+function afterPlace() {
+  selected = null;
+  showInspector(null);
+  setTool('select');
+  buildTray();
+}
+
 function placeAt(g) {
+  if (!pickedType || !MACHINES[pickedType]) return;   /* nothing armed */
   if (pickedType === 'termIn' || pickedType === 'termOut') {
     if (!inFactory()) return toast('Terminals only go inside a factory.');
     const s = snapToWall(g.x, g.z, pickedType);
@@ -3001,8 +3041,10 @@ function placeAt(g) {
     e.wall = s.wall;
     const kin = ents.filter((o) => o.type === pickedType);
     e.index = kin.reduce((mx, o) => Math.max(mx, o === e ? -1 : (o.index == null ? -1 : o.index)), -1) + 1;
+    const label = pickedType === 'termIn' ? 'Input' : 'Output';
     resolve();
-    toast((pickedType === 'termIn' ? 'Input' : 'Output') + ' port added to this factory');
+    afterPlace();
+    toast(label + ' port added to this factory');
     return;
   }
   if (pickedType === 'factory') {
@@ -3013,6 +3055,7 @@ function placeAt(g) {
     e.def = pickedDesign ? JSON.parse(JSON.stringify(pickedDesign)) : { w: INTERIOR_W, h: INTERIOR_H, entities: [], links: [], seq: 0 };
     e.def.name = (pickedDesign && pickedDesign.name) || 'Factory';
     resolve();
+    afterPlace();
     return;
   }
   const err = canPlace(pickedType, g.x, g.z, pickedRot);
@@ -3020,6 +3063,7 @@ function placeAt(g) {
   const e = addEntity(pickedType, g.x, g.z, pickedRot);
   if (pickedRecipe) e.recipe = pickedRecipe;
   resolve();
+  afterPlace();
 }
 
 function handleTap(g, cx, cy) {
@@ -3029,7 +3073,7 @@ function handleTap(g, cx, cy) {
   if (e) { selected = e; buildMachines(); showInspector(e); refreshRotate(); return; }
   const l = beltAt(g);
   if (l) { selected = null; buildMachines(); showBeltInspector(l); return; }
-  selected = null; buildMachines(); showInspector(null); refreshRotate();
+  deselect();
 }
 
 function ghostAt(cx, cy) {
@@ -3111,6 +3155,12 @@ $('#plannerBtn').onclick = () => {
 };
 
 addEventListener('resize', layoutCamera);
+addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Escape') return;
+  closeMenu();
+  if (tool === 'place') { setTool('select'); buildTray(); }
+  else deselect();
+});
 
 /* ============================================================
    FACTORIES: build, enter, exit
