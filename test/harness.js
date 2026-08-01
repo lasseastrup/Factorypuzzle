@@ -1809,3 +1809,63 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 12900);
+
+/* --- rendering budget ---
+   Detail is worth having only if it stays affordable. three.js issues one draw call per
+   mesh, so a machine built from a dozen little boxes is a dozen calls unless its static
+   parts are merged. This guards against the polish creeping back up. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- rendering budget ---');
+
+  api.loadLevel(9);                       /* the largest plot */
+  const lv = api.LEVELS[9];
+  for (const n of lv.nodes) api.addEntity('miner', n.x, n.z, 0);
+  let placed = 0;
+  for (let z = 4; z < lv.h - 3 && placed < 12; z += 3) {
+    for (let x = 7; x < lv.w - 4 && placed < 12; x += 3) {
+      if (!api.canPlace('smelter', x, z, 0)) { api.addEntity('smelter', x, z, 0); placed++; }
+    }
+  }
+  api.resolve();
+  api.frame(performance.now());
+
+  let meshes = 0, instanced = 0, tris = 0;
+  api.scene.traverse((o) => {
+    if (!o.isMesh) return;
+    if (o.isInstancedMesh) instanced++; else meshes++;
+    const g = o.geometry;
+    const n = g.index ? g.index.count : (g.attributes.position ? g.attributes.position.count : 0);
+    tris += (n / 3) * (o.isInstancedMesh ? (o.count || 1) : 1);
+  });
+  const calls = meshes + instanced;
+  const machines = api.ents().length;
+
+  ok(calls < 130, `${machines} machines draw in ${calls} calls (budget 130)`);
+  ok(calls / machines < 7, `about ${(calls / machines).toFixed(1)} calls per machine`);
+  ok(tris < 120000, `${Math.round(tris / 1000)}k triangles (budget 120k)`);
+  ok(instanced >= 6, `bulk content stays instanced (${instanced} instanced meshes)`);
+
+  /* a machine's static parts really are collapsed into one mesh */
+  const grp = api.gMachines.children.find((gr) => gr.userData.ent && gr.userData.ent.type === 'smelter');
+  const solid = grp.children.filter((c) => c.isMesh && !c.material.transparent);
+  ok(solid.length <= 4, `a smelter is ${solid.length} solid mesh(es), not a dozen`);
+  const merged = solid.find((c) => c.geometry.attributes.color && c.geometry.index
+    && c.geometry.index.count > 200);
+  ok(!!merged, 'and one of them is the merged body');
+  ok(!!merged && merged.castShadow, 'which still casts a shadow');
+
+  /* the merge must preserve colour variety, or everything comes out one flat tone */
+  if (merged) {
+    const ca = merged.geometry.attributes.color;
+    const seen = new Set();
+    for (let i = 0; i < ca.count; i += 7) {
+      seen.add([ca.getX(i), ca.getY(i), ca.getZ(i)].map((v) => v.toFixed(2)).join(','));
+    }
+    ok(seen.size > 6, `colours survive the merge (${seen.size} distinct vertex tints)`);
+  }
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 13400);

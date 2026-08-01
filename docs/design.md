@@ -383,6 +383,16 @@ Two consequences of an oblique view that are easy to get wrong:
 
 Clean, bright, low-poly industrial. Flat colours, strong silhouettes, minimal texture detail — driven by readability at phone scale first and performance second. Each item type has a distinct colour and shape so a belt's contents are identifiable while zoomed out. Machines animate visibly when running so 100% vs 60% is felt as well as read.
 
+**What actually made it stop looking like coloured blocks**, in rough order of effect per unit of work:
+
+1. **Grounding.** Shadows say where the sun is; they do not say an object is *touching the floor*. A soft contact blob under every machine plus a low plinth does, and both are nearly free. Objects that appear to hover is the single most common reason a low-poly scene reads as unfinished.
+2. **Vertical gradient in vertex colours** — darker at the base, lighter on top. One attribute, and it fakes the ambient falloff a real occlusion pass would give. This is what stops a box reading as a box.
+3. **Breaking up flat expanses.** A large area of one colour looks unfinished no matter how good the lighting is. Speckled concrete with faint construction joints costs one canvas texture.
+4. **Detail where the eye already is.** Rollers at the ends of every belt, a handrail on the miner's deck, a hopper on the smelter. Detail placed where the player is already looking is worth several times the same effort spent elsewhere.
+5. **A faint specular on metal only.** Lambert everywhere reads as matte plastic. Low shininess on steel and trim, while painted bodies stay matte, is enough to separate the materials.
+
+**And the cost has to be watched.** The polish took the scene from 250 draw calls at fifteen machines to 82, in the wrong direction first: every little box was its own mesh and its own material. The static parts of a machine never move relative to each other, so they are merged into one geometry with the colours baked into vertex colours; animated, transparent and textured parts are left out of the merge. Plot furniture gets the same treatment — ore clusters alone were eleven meshes per node. `test/harness.js` now asserts a draw-call budget, because detail is only worth having if it stays affordable.
+
 Audio: rhythmic, layered. Each machine type contributes a loop; a well-balanced factory should sound like a groove locking in. A stalled line goes audibly arrhythmic — audio as a diagnostic channel.
 
 ---

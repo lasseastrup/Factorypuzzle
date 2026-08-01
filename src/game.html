@@ -657,13 +657,14 @@ function placeCamera() {
    sums to just under 1.0. Stacking them past that silently clips every pale
    surface to pure white, which is what happened to the concrete slab.
    test/harness.js asserts the sum, so it cannot drift again unnoticed. */
-scene.add(new THREE.HemisphereLight(0xdce9f2, 0x6d6a54, 0.45));
+/* sky above, warm bounce off the ground below */
+scene.add(new THREE.HemisphereLight(0xdce9f2, 0x7c6f52, 0.45));
 
 const sun = new THREE.DirectionalLight(0xfff2d8, 0.68);
 sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.bias = -0.0006;
-sun.shadow.normalBias = 0.02;
+sun.shadow.normalBias = 0.028;
 scene.add(sun);
 scene.add(sun.target);
 
@@ -756,10 +757,20 @@ function buildPad() {
   /* ---- concrete slab: the buildable plot, with a chamfered rim ---- */
   const slabH = 0.55;
   const slab = new THREE.Mesh(new THREE.BoxGeometry(L.w, slabH, L.h),
-    new THREE.MeshLambertMaterial({ color: 0xc6c3b4 }));
+    new THREE.MeshLambertMaterial({ color: 0xc6c3b4, map: concreteTex(L.w, L.h) }));
   slab.position.set(L.w / 2, -slabH / 2 + 0.02, L.h / 2);
   slab.receiveShadow = true;
   gPad.add(slab);
+
+  /* a kerb, kept low enough not to hide a belt at this camera angle */
+  const kerbMat = MATG(0x9d9a8b);
+  for (const [kx, kz, kw, kd] of [[L.w / 2, -0.09, L.w + 0.18, 0.18], [L.w / 2, L.h + 0.09, L.w + 0.18, 0.18],
+                                  [-0.09, L.h / 2, 0.18, L.h], [L.w + 0.09, L.h / 2, 0.18, L.h]]) {
+    const k = new THREE.Mesh(GRAD(new THREE.BoxGeometry(kw, 0.16, kd)), kerbMat);
+    k.position.set(kx, 0.06, kz);
+    k.castShadow = true; k.receiveShadow = true;
+    gPad.add(k);
+  }
 
   /* a slightly wider, darker apron so the slab reads as poured, not floating */
   const apron = new THREE.Mesh(new THREE.BoxGeometry(L.w + 0.9, 0.34, L.h + 0.9),
@@ -818,6 +829,18 @@ function buildPad() {
     if (!outside) continue;
     (rr() < 0.42 ? bould : tuft).push([x, z, 0.4 + rr() * 1.5, rr() * 6.28]);
   }
+  /* a darker graded verge hugging the pad, so the slab does not simply stop */
+  {
+    const vg = new THREE.RingGeometry(0.1, 3.4, 40, 1);
+    vg.rotateX(-Math.PI / 2);
+    const verge = new THREE.Mesh(vg, new THREE.MeshBasicMaterial({
+      color: 0x6f6a56, transparent: true, opacity: 0.22, depthWrite: false }));
+    verge.scale.set((L.w + 5) / 6.8, 1, (L.h + 5) / 6.8);
+    verge.position.set(L.w / 2, 0.012, L.h / 2);
+    verge.renderOrder = -2;
+    gEnv.add(verge);
+  }
+
   if (bould.length) {
     const m = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0),
       new THREE.MeshLambertMaterial({ color: 0x87897c }), bould.length);
@@ -850,10 +873,10 @@ function buildPad() {
     pit.receiveShadow = true;
     gPad.add(pit);
     const nr = rng(Math.round(n.x * 97 + n.z * 31));
-    for (let i = 0; i < 9; i++) {
+    for (let i = 0; i < 6; i++) {
       const a = nr() * 6.283, d = nr() * 0.82, s = 0.15 + nr() * 0.2;
-      const lump = new THREE.Mesh(new THREE.IcosahedronGeometry(s, 0),
-        new THREE.MeshLambertMaterial({ color: n.rate >= 60 ? 0xa8734a : 0x8d7b6b }));
+      const lump = new THREE.Mesh(GRAD(new THREE.IcosahedronGeometry(s * 1.15, 0)),
+        MATG(n.rate >= 60 ? 0xa8734a : 0x8d7b6b));
       lump.position.set(n.x + Math.cos(a) * d, 0.13 + s * 0.5, n.z + Math.sin(a) * d);
       lump.rotation.set(a, a * 1.7, a * 0.4);
       lump.castShadow = true;
@@ -866,23 +889,54 @@ function buildPad() {
 
   /* ---- obstacle rocks on the plot ---- */
   for (const r of L.rocks) {
-    const g = new THREE.Group();
-    const main = new THREE.Mesh(new THREE.DodecahedronGeometry(r.r, 0),
-      new THREE.MeshLambertMaterial({ color: 0x8b8d83 }));
-    main.position.y = r.r * 0.62;
+    const main = new THREE.Mesh(GRAD(new THREE.DodecahedronGeometry(r.r, 0)), MATG(0x8b8d83));
+    main.position.set(r.x, r.r * 0.62, r.z);
     main.rotation.set(r.x, r.z, 0.4);
     main.scale.set(1, 0.82, 1);
     main.castShadow = true; main.receiveShadow = true;
-    g.add(main);
-    const chip = new THREE.Mesh(new THREE.DodecahedronGeometry(r.r * 0.42, 0),
-      new THREE.MeshLambertMaterial({ color: 0x9a9c91 }));
-    chip.position.set(r.r * 0.72, r.r * 0.28, -r.r * 0.5);
+    gPad.add(main);
+    const chip = new THREE.Mesh(GRAD(new THREE.DodecahedronGeometry(r.r * 0.42, 0)), MATG(0x9a9c91));
+    chip.position.set(r.x + r.r * 0.72, r.r * 0.28, r.z - r.r * 0.5);
     chip.rotation.set(r.z, r.x, 1.1);
     chip.castShadow = true;
-    g.add(chip);
-    g.position.set(r.x, 0, r.z);
-    gPad.add(g);
+    gPad.add(chip);
   }
+
+  /* Collapse the plot furniture too. Ore clusters alone were eleven meshes per node,
+     which is a lot of draw calls for scenery that never moves. */
+  collapseStatic(gPad, new Set());
+}
+
+/* Speckled concrete. A flat expanse of one colour is the thing that most makes a 3D
+   scene look unfinished, and noise is the cheapest possible fix. */
+let CONCRETE = null;
+function concreteTex(w, d) {
+  if (!CONCRETE) {
+    const N = 128;
+    const c = document.createElement('canvas');
+    c.width = N; c.height = N;
+    const g = c.getContext('2d');
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, N, N);
+    const r = rng(5150);
+    for (let i = 0; i < 2600; i++) {
+      const v = r();
+      g.fillStyle = v > 0.5 ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.07)';
+      const s = 1 + Math.floor(r() * 2);
+      g.fillRect(Math.floor(r() * N), Math.floor(r() * N), s, s);
+    }
+    /* faint construction joints, so the pad reads as poured in bays */
+    g.strokeStyle = 'rgba(0,0,0,0.07)';
+    g.lineWidth = 2;
+    g.beginPath(); g.moveTo(0, N / 2); g.lineTo(N, N / 2); g.moveTo(N / 2, 0); g.lineTo(N / 2, N); g.stroke();
+    CONCRETE = new THREE.CanvasTexture(c);
+    CONCRETE.wrapS = CONCRETE.wrapT = THREE.RepeatWrapping;
+  }
+  const t = CONCRETE.clone();
+  t.needsUpdate = true;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(w / 4, d / 4);
+  return t;
 }
 
 function makeSprite(text) {
@@ -1440,9 +1494,125 @@ function yAt(l, s) {
    Moving parts are stashed on userData so the frame loop can animate them
    without rebuilding geometry. */
 const MAT = (c) => new THREE.MeshLambertMaterial({ color: c });
+/* A little specular for the metal parts. Lambert alone reads as matte plastic; a low
+   shininess is enough to say "painted steel" without an environment map. */
+const MATS = (c, shine) => new THREE.MeshPhongMaterial({
+  color: c, specular: 0x2a2f33, shininess: shine == null ? 22 : shine, flatShading: false });
+
+/* Vertical gradient baked into vertex colours: darker at the base, lighter on top. This
+   is what stops a box reading as a box — it fakes the ambient falloff that a real
+   occlusion pass would give, for the price of one attribute. */
+function tintVertical(geo, bottom, top) {
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox;
+  const span = Math.max(1e-6, bb.max.y - bb.min.y);
+  const pos = geo.attributes.position, col = [];
+  for (let i = 0; i < pos.count; i++) {
+    const t = (pos.getY(i) - bb.min.y) / span;
+    const k = bottom + (top - bottom) * t;
+    col.push(k, k, k);
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  return geo;
+}
+const GRAD = (geo) => tintVertical(geo, 0.72, 1.06);
+const MATG = (c, shine) => {
+  const m = shine == null ? new THREE.MeshLambertMaterial({ color: c }) : MATS(c, shine);
+  m.vertexColors = true;
+  return m;
+};
+
+/* One soft blob, reused under every machine. Directional shadows say where the sun is;
+   this says the object is touching the ground, which is the cue that was missing. */
+const CONTACT_TEX = (function () {
+  const N = 64;
+  const c = document.createElement('canvas');
+  c.width = N; c.height = N;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(N / 2, N / 2, N * 0.12, N / 2, N / 2, N * 0.5);
+  grd.addColorStop(0, 'rgba(0,0,0,0.55)');
+  grd.addColorStop(0.55, 'rgba(0,0,0,0.22)');
+  grd.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, N, N);
+  return new THREE.CanvasTexture(c);
+})();
+function contactShadow(w, d) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w * 1.7, d * 1.7),
+    new THREE.MeshBasicMaterial({ map: CONTACT_TEX, transparent: true, depthWrite: false, opacity: 0.9 }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.y = 0.03;
+  m.renderOrder = -1;
+  return m;
+}
 const STEEL = 0xc9c5b6, DARK = 0x272c2e, TRIM = 0xa39b86;
+const MET = (c) => MATG(c, 26);      /* painted steel: matte colour with a faint highlight */
+
+/* ---- draw-call budget ----
+   Every machine is a dozen little boxes, and three.js issues one draw call per mesh. At
+   fifteen machines that was 250 calls for a scene that should need a few dozen. The
+   static parts of a machine never move relative to each other, so they are merged into a
+   single geometry with the colours baked into vertex colours. Anything that animates, or
+   is transparent, is left alone.
+
+   This is the same reasoning as the instanced item pools: the simulation may be small,
+   but the renderer still has to be told as little as possible. */
+const SOLID = new THREE.MeshPhongMaterial({
+  vertexColors: true, specular: 0x23282b, shininess: 20 });
+
+function mergeStatic(meshes) {
+  const pos = [], nrm = [], col = [], idx = [];
+  let base = 0;
+  const v = new THREE.Vector3(), n = new THREE.Vector3(), c = new THREE.Color();
+  const nm = new THREE.Matrix3();
+  for (const m of meshes) {
+    const g = m.geometry;
+    if (!g.attributes.position) continue;
+    m.updateMatrix();
+    nm.getNormalMatrix(m.matrix);
+    c.copy(m.material.color);
+    const p = g.attributes.position, no = g.attributes.normal, cl = g.attributes.color;
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i).applyMatrix4(m.matrix);
+      pos.push(v.x, v.y, v.z);
+      if (no) { n.fromBufferAttribute(no, i).applyMatrix3(nm).normalize(); nrm.push(n.x, n.y, n.z); }
+      else nrm.push(0, 1, 0);
+      /* bake the material colour, times whatever gradient the part already carried */
+      const k = cl ? cl.getX(i) : 1;
+      col.push(c.r * k, c.g * k, c.b * k);
+    }
+    if (g.index) { for (let i = 0; i < g.index.count; i++) idx.push(base + g.index.getX(i)); }
+    else { for (let i = 0; i < p.count; i++) idx.push(base + i); }
+    base += p.count;
+  }
+  if (!pos.length) return null;
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  out.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  out.setIndex(idx);
+  const mesh = new THREE.Mesh(out, SOLID);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+/* Collapse a machine's static parts. Animated meshes, transparent ones and sub-groups
+   are left where they are. */
+function collapseStatic(group, keep) {
+  const statics = group.children.filter((c) =>
+    c.isMesh && !keep.has(c) && !c.material.transparent && c.material.color
+    && !c.material.map && !c.isInstancedMesh);
+  if (statics.length < 3) return;
+  const merged = mergeStatic(statics);
+  if (!merged) return;
+  for (const m of statics) { group.remove(m); m.geometry.dispose(); m.material.dispose(); }
+  group.add(merged);
+}
 
 function part(group, geo, mat, x, y, z, shadow) {
+  /* tint anything that has not been tinted already, so every solid gets the falloff */
+  if (!geo.attributes.color && mat.vertexColors) GRAD(geo);
   const m = new THREE.Mesh(geo, mat);
   m.position.set(x, y, z);
   if (shadow !== false) { m.castShadow = true; m.receiveShadow = true; }
@@ -1458,85 +1628,106 @@ function buildMachines() {
     g.position.set(e.x, 0, e.z);
     g.rotation.y = machineYaw(e);   /* local +Z is the output face */
     const anim = {};
-    const body = MAT(MACHINE_COLOR[e.type]);
+    const body = MATG(MACHINE_COLOR[e.type]);
     /* footprint in local space: depth along Z, width along X */
     const w = def.w, d = def.h;
+
+    /* seat it: a soft contact blob, then a low plinth so the body does not simply
+       intersect the floor at a hard line */
+    if (def.kind !== 'pass') {
+      g.add(contactShadow(w, d));
+      const plinth = new THREE.Mesh(GRAD(new THREE.BoxGeometry(w + 0.14, 0.1, d + 0.14)),
+        MATG(0x6f7269));
+      plinth.position.y = 0.05;
+      plinth.receiveShadow = true;
+      g.add(plinth);
+    }
 
     if (def.kind === 'miner') {
       part(g, new THREE.BoxGeometry(w - 0.2, 0.4, d - 0.2), body, 0, 0.2, 0);
       /* four legs and a drill tower */
       for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-        part(g, new THREE.BoxGeometry(0.16, 0.9, 0.16), MAT(DARK), sx * (w / 2 - 0.28), 0.45, sz * (d / 2 - 0.28));
+        part(g, new THREE.BoxGeometry(0.16, 0.9, 0.16), MATG(DARK), sx * (w / 2 - 0.28), 0.45, sz * (d / 2 - 0.28));
       }
       part(g, new THREE.BoxGeometry(w - 0.55, 0.5, d - 0.55), body, 0, 1.05, 0);
-      anim.drum = part(g, new THREE.CylinderGeometry(0.34, 0.34, 0.62, 12), MAT(TRIM), 0, 1.55, 0);
+      anim.drum = part(g, new THREE.CylinderGeometry(0.34, 0.34, 0.62, 12), MET(TRIM), 0, 1.55, 0);
       anim.drum.rotation.z = Math.PI / 2;
-      part(g, new THREE.ConeGeometry(0.26, 0.7, 8), MAT(DARK), 0, 0.5, 0);
-      part(g, new THREE.BoxGeometry(0.34, 0.2, 0.5), MAT(DARK), 0, 0.45, d / 2 - 0.1);
+      /* handrail around the deck: small, and it does a lot for the sense of scale */
+      for (const sz of [-1, 1]) {
+        part(g, new THREE.BoxGeometry(w - 0.5, 0.05, 0.05), MATG(DARK), 0, 1.62, sz * (d / 2 - 0.3), false);
+        for (const sx of [-1, 1]) {
+          part(g, new THREE.BoxGeometry(0.05, 0.34, 0.05), MATG(DARK),
+            sx * (w / 2 - 0.28), 1.45, sz * (d / 2 - 0.3), false);
+        }
+      }
+      part(g, new THREE.ConeGeometry(0.26, 0.7, 8), MATG(DARK), 0, 0.5, 0);
+      part(g, new THREE.BoxGeometry(0.34, 0.2, 0.5), MATG(DARK), 0, 0.45, d / 2 - 0.1);
 
     } else if (e.type === 'smelter') {
       part(g, new THREE.BoxGeometry(w - 0.18, 0.75, d - 0.18), body, 0, 0.375, 0);
       /* firebox mouth glows when it is actually running */
       anim.glow = part(g, new THREE.BoxGeometry(w * 0.5, 0.26, 0.08),
         new THREE.MeshBasicMaterial({ color: 0x2a1a12 }), 0, 0.34, d / 2 - 0.06, false);
-      part(g, new THREE.CylinderGeometry(0.2, 0.26, 1.15, 10), MAT(0x6d5f52), -w / 2 + 0.42, 1.2, -d / 2 + 0.42);
-      part(g, new THREE.CylinderGeometry(0.26, 0.2, 0.16, 10), MAT(DARK), -w / 2 + 0.42, 1.85, -d / 2 + 0.42);
-      part(g, new THREE.BoxGeometry(w * 0.42, 0.3, d * 0.42), MAT(STEEL), w * 0.15, 0.9, 0);
+      part(g, new THREE.CylinderGeometry(0.2, 0.26, 1.15, 10), MATG(0x6d5f52), -w / 2 + 0.42, 1.2, -d / 2 + 0.42);
+      part(g, new THREE.CylinderGeometry(0.26, 0.2, 0.16, 10), MATG(DARK), -w / 2 + 0.42, 1.85, -d / 2 + 0.42);
+      part(g, new THREE.BoxGeometry(w * 0.42, 0.3, d * 0.42), MET(STEEL), w * 0.15, 0.9, 0);
+      /* a tapered hopper on top, where the ore goes in */
+      part(g, new THREE.CylinderGeometry(0.34, 0.16, 0.34, 6), MET(0x8d8878), w * 0.15, 1.2, 0);
       anim.puff = part(g, new THREE.SphereGeometry(0.3, 8, 6),
         new THREE.MeshLambertMaterial({ color: 0xd8d2c4, transparent: true, opacity: 0.5 }),
         -w / 2 + 0.42, 2.15, -d / 2 + 0.42, false);
 
     } else if (e.type === 'constructor') {
       part(g, new THREE.BoxGeometry(w - 0.18, 0.5, d - 0.18), body, 0, 0.25, 0);
-      part(g, new THREE.BoxGeometry(w - 0.5, 0.32, d - 1.1), MAT(STEEL), 0, 0.66, 0);
+      part(g, new THREE.BoxGeometry(w - 0.5, 0.32, d - 1.1), MET(STEEL), 0, 0.66, 0);
       /* gantry with a press head that strokes up and down */
-      for (const sx of [-1, 1]) part(g, new THREE.BoxGeometry(0.14, 0.95, 0.14), MAT(DARK), sx * (w / 2 - 0.24), 0.97, 0);
-      part(g, new THREE.BoxGeometry(w - 0.3, 0.16, 0.4), MAT(DARK), 0, 1.42, 0);
-      anim.press = part(g, new THREE.BoxGeometry(w - 0.72, 0.3, 0.5), MAT(TRIM), 0, 1.05, 0);
-      part(g, new THREE.BoxGeometry(0.3, 0.18, 0.44), MAT(DARK), 0, 0.4, d / 2 - 0.08);
+      for (const sx of [-1, 1]) part(g, new THREE.BoxGeometry(0.14, 0.95, 0.14), MATG(DARK), sx * (w / 2 - 0.24), 0.97, 0);
+      part(g, new THREE.BoxGeometry(w - 0.3, 0.16, 0.4), MATG(DARK), 0, 1.42, 0);
+      anim.press = part(g, new THREE.BoxGeometry(w - 0.72, 0.3, 0.5), MET(TRIM), 0, 1.05, 0);
+      part(g, new THREE.BoxGeometry(0.3, 0.18, 0.44), MATG(DARK), 0, 0.4, d / 2 - 0.08);
 
     } else if (e.type === 'assembler') {
       part(g, new THREE.BoxGeometry(w - 0.18, 0.46, d - 0.18), body, 0, 0.23, 0);
-      part(g, new THREE.BoxGeometry(w - 0.7, 0.14, d - 0.7), MAT(0x3a3f41), 0, 0.53, 0);
+      part(g, new THREE.BoxGeometry(w - 0.7, 0.14, d - 0.7), MATG(0x3a3f41), 0, 0.53, 0);
       /* two arms that sweep in opposite directions */
       for (const s of [-1, 1]) {
         const post = new THREE.Group();
         post.position.set(s * (w / 2 - 0.62), 0.6, s * 0.5);
-        part(post, new THREE.CylinderGeometry(0.17, 0.2, 0.5, 10), MAT(DARK), 0, 0.25, 0);
+        part(post, new THREE.CylinderGeometry(0.17, 0.2, 0.5, 10), MATG(DARK), 0, 0.25, 0);
         const arm = new THREE.Group();
         arm.position.y = 0.5;
-        part(arm, new THREE.BoxGeometry(0.9, 0.13, 0.16), MAT(TRIM), 0.45, 0, 0);
-        part(arm, new THREE.BoxGeometry(0.2, 0.26, 0.2), MAT(STEEL), 0.9, -0.08, 0);
+        part(arm, new THREE.BoxGeometry(0.9, 0.13, 0.16), MET(TRIM), 0.45, 0, 0);
+        part(arm, new THREE.BoxGeometry(0.2, 0.26, 0.2), MET(STEEL), 0.9, -0.08, 0);
         post.add(arm);
         g.add(post);
         (anim.arms = anim.arms || []).push(arm);
       }
-      part(g, new THREE.BoxGeometry(w * 0.5, 0.34, 0.3), MAT(STEEL), 0, 0.68, -d / 2 + 0.3);
-      part(g, new THREE.BoxGeometry(0.34, 0.2, 0.4), MAT(DARK), 0, 0.4, d / 2 - 0.1);
+      part(g, new THREE.BoxGeometry(w * 0.5, 0.34, 0.3), MET(STEEL), 0, 0.68, -d / 2 + 0.3);
+      part(g, new THREE.BoxGeometry(0.34, 0.2, 0.4), MATG(DARK), 0, 0.4, d / 2 - 0.1);
 
     } else if (def.kind === 'splitter' || def.kind === 'merger') {
       part(g, new THREE.CylinderGeometry(0.46, 0.5, 0.3, 6), body, 0, 0.15, 0);
-      part(g, new THREE.CylinderGeometry(0.2, 0.2, 0.1, 8), MAT(STEEL), 0, 0.33, 0);
+      part(g, new THREE.CylinderGeometry(0.2, 0.2, 0.1, 8), MET(STEEL), 0, 0.33, 0);
 
     } else if (def.kind === 'factory') {
       /* a shell, deliberately blank: what matters is inside */
-      part(g, new THREE.BoxGeometry(w - 0.15, 0.9, d - 0.15), MAT(0x4a5b63), 0, 0.45, 0);
-      part(g, new THREE.BoxGeometry(w - 0.9, 0.16, d - 0.9), MAT(0x8fa0a8), 0, 0.96, 0);
+      part(g, new THREE.BoxGeometry(w - 0.15, 0.9, d - 0.15), MATG(0x4a5b63), 0, 0.45, 0);
+      part(g, new THREE.BoxGeometry(w - 0.9, 0.16, d - 0.9), MET(0x8fa0a8), 0, 0.96, 0);
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-        part(g, new THREE.BoxGeometry(0.22, 1.0, 0.22), MAT(0x2f3a40), sx * (w / 2 - 0.2), 0.5, sz * (d / 2 - 0.2));
+        part(g, new THREE.BoxGeometry(0.22, 1.0, 0.22), MATG(0x2f3a40), sx * (w / 2 - 0.2), 0.5, sz * (d / 2 - 0.2));
       }
     } else if (e.type === 'termIn' || e.type === 'termOut') {
       const c = e.type === 'termIn' ? 0x4d7a4f : 0x7a4d4d;
       part(g, new THREE.BoxGeometry(0.9, 0.75, 1.7), MAT(c), 0, 0.375, 0);
-      part(g, new THREE.BoxGeometry(0.5, 0.2, 0.5), MAT(0xe0dccd), 0, 0.8, 0);
+      part(g, new THREE.BoxGeometry(0.5, 0.2, 0.5), MET(0xe0dccd), 0, 0.8, 0);
     } else if (def.kind === 'sink') {
       /* a depot shed, open toward the plot */
-      part(g, new THREE.BoxGeometry(w, 0.22, d), MAT(0x8e8b7a), 0, 0.11, 0);
+      part(g, new THREE.BoxGeometry(w, 0.22, d), MATG(0x8e8b7a), 0, 0.11, 0);
       part(g, new THREE.BoxGeometry(w - 0.1, 0.9, 0.16), body, 0, 0.55, -d / 2 + 0.08);
       for (const s of [-1, 1]) part(g, new THREE.BoxGeometry(0.16, 0.9, d - 0.2), body, s * (w / 2 - 0.08), 0.55, 0);
-      const roof = part(g, new THREE.BoxGeometry(w + 0.3, 0.12, d + 0.3), MAT(0x445a4c), 0, 1.06, 0);
+      const roof = part(g, new THREE.BoxGeometry(w + 0.3, 0.12, d + 0.3), MATG(0x445a4c), 0, 1.06, 0);
       roof.rotation.x = 0.04;
-      part(g, new THREE.BoxGeometry(w * 0.7, 0.1, 0.1), MAT(TRIM), 0, 0.22, d / 2 - 0.2);
+      part(g, new THREE.BoxGeometry(w * 0.7, 0.1, 0.1), MET(TRIM), 0, 0.22, d / 2 - 0.2);
     }
 
     /* ---- ports ----
@@ -1544,8 +1735,8 @@ function buildMachines() {
        here would rotate them a second time and put every port on the wrong face. */
     const P = localPorts(e);
     P.out.forEach((p, i) => {
-      part(g, new THREE.BoxGeometry(0.4, 0.22, 0.3), MAT(DARK), p.x, 0.34, p.z);
-      part(g, new THREE.BoxGeometry(0.3, 0.07, 0.18), MAT(0x8f9a5a), p.x, 0.47, p.z, false);
+      part(g, new THREE.BoxGeometry(0.4, 0.22, 0.3), MATG(DARK), p.x, 0.34, p.z);
+      part(g, new THREE.BoxGeometry(0.3, 0.07, 0.18), MET(0x8f9a5a), p.x, 0.47, p.z, false);
       /* An unused output gets a bobbing arrow. Removing the Belt cards and the Paint
          belt tool in the same pass left nothing in the interface hinting that belts
          exist at all, so the gesture had to be taught where it is performed. */
@@ -1562,7 +1753,7 @@ function buildMachines() {
     P.in.forEach((p, i) => {
       const item = P.inItems[i];
       part(g, new THREE.BoxGeometry(0.36, 0.2, 0.28),
-        MAT(item ? ITEMS[item].color : 0xd2cdbe), p.x, 0.32, p.z);
+        MET(item ? ITEMS[item].color : 0xd2cdbe), p.x, 0.32, p.z);
     });
 
     if (e === selected) {
@@ -1579,6 +1770,13 @@ function buildMachines() {
         g.add(b2);
       }
     }
+
+    const keep = new Set();
+    for (const v of Object.values(anim)) {
+      if (!v) continue;
+      if (Array.isArray(v)) v.forEach((x) => keep.add(x)); else keep.add(v);
+    }
+    collapseStatic(g, keep);
 
     g.userData.anim = anim;
     g.userData.ent = e;
@@ -1730,6 +1928,31 @@ function buildBelts() {
     m.castShadow = true;
     gBelts.add(m);
   }
+  /* Rollers at each end. A conveyor terminates in a drum, and putting one there is the
+     detail that stops a belt looking like a painted stripe with rails glued on. */
+  const rollers = [];
+  for (const l of links) {
+    if (!l.path || l.path.length < 2) continue;
+    for (const [s, i] of [[0.06, 1], [l.length - 0.06, l.path.length - 2]]) {
+      const p = posAt(l, Math.max(0, Math.min(l.length, s)));
+      const q = l.path[Math.max(0, Math.min(l.path.length - 1, i))];
+      rollers.push({ p, head: Math.atan2(q.x - p.x, q.z - p.z) });
+    }
+  }
+  if (rollers.length) {
+    const rm = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.085, 0.085, BELT_HW * 2 + 0.05, 10),
+      MET(0x767c82), rollers.length);
+    const mx = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+    rollers.forEach((r, i) => {
+      e.set(0, r.head, Math.PI / 2, 'YZX');
+      q.setFromEuler(e);
+      mx.compose(new THREE.Vector3(r.p.x, r.p.y - 0.02, r.p.z), q, new THREE.Vector3(1, 1, 1));
+      rm.setMatrixAt(i, mx);
+    });
+    rm.castShadow = true;
+    gBelts.add(rm);
+  }
+
   if (legs.length) {
     const lm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.075, 1, 0.075),
       new THREE.MeshLambertMaterial({ color: 0x4c5257 }), legs.length);
@@ -1764,8 +1987,7 @@ function buildItemPools() {
   for (const k of Object.keys(itemMeshes)) delete itemMeshes[k];
   for (const key of Object.keys(ITEMS)) {
     const geo = (ITEM_GEO[key] || (() => new THREE.BoxGeometry(0.24, 0.18, 0.24)))();
-    const m = new THREE.InstancedMesh(geo,
-      new THREE.MeshLambertMaterial({ color: ITEMS[key].color }), MAX_ITEMS_PER_TYPE);
+    const m = new THREE.InstancedMesh(geo, MATS(ITEMS[key].color, 34), MAX_ITEMS_PER_TYPE);
     m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     m.count = 0; m.frustumCulled = false;
     m.castShadow = true;
@@ -1867,7 +2089,9 @@ function updateItems(t) {
       const p = posAt(l, s);
       const q = posAt(l, Math.min(l.length, s + 0.25));
       const head = Math.atan2(q.x - p.x, q.z - p.z);
-      _e.set(lie ? Math.PI / 2 : 0, head, 0, 'YXZ');
+      /* loose ore tumbles; finished goods lie flat, because they were placed there */
+      const roll = l.item === 'ore' ? s * 2.6 : (lie ? Math.PI / 2 : 0);
+      _e.set(roll, head, 0, 'YXZ');
       _q.setFromEuler(_e);
       _v.set(p.x, p.y, p.z);
       _m.compose(_v, _q, _sc);
