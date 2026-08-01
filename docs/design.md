@@ -160,7 +160,13 @@ This matters more than it sounds. Solving only for steady state says an unfinish
 Two rules keep it honest:
 
 - **Queues obey conservation.** A belt's backlog grows by what arrives minus what the far end removes. When those are equal it *holds its length* — it does not quietly drain. So connecting a stalled line does not magically clear the backlog; the backlog only shrinks if the far end outpaces the near end. A packed queue that is being consumed creeps forward at the consumption rate rather than sitting frozen.
-- **Quota is only credited once nothing is still accumulating.** While a belt fills, upstream runs faster than the line can ultimately sustain, so crediting output during that window would let a factory pass on a transient it cannot hold.
+- **Junctions pass material through; they do not hold it.** A splitter and a merger have no length and no storage, so an item arriving at one continues onto an outgoing belt in the same instant. Which branch it takes is decided by whichever is furthest behind its share of the solved rates, so an uneven split like 40/20 is honoured rather than quietly evened out by round-robin.
+
+This replaced a model where each belt spawned and drained on its own rate accumulator, with nothing actually handed across the junction. The two sides agreed *on average*, which is why it mostly looked right — but material was consumed on one side and independently invented on the other, and the accumulators drifted in and out of phase. The symptom was a queue building at a splitter, two items admitted at once, then a pause. Nothing was wrong with the throughput; the presentation was simply two independent processes pretending to be one. A belt leaving a junction is now fed only by transfer, never by spawning, because spawning there as well would create material from nothing.
+
+The rule this suggests generally: **where the simulation says two things are the same event, the presentation must not model them as two.**
+
+**Quota is only credited once nothing is still accumulating.** While a belt fills, upstream runs faster than the line can ultimately sustain, so crediting output during that window would let a factory pass on a transient it cannot hold.
 
 From act 2, some recipes emit a secondary output. If a byproduct isn't consumed or sunk, the machine's output blocks and the whole line stalls. This converts the game from "chain builder" to "system balancer" and is where the real difficulty lives. Sinks (incinerators) exist but cost score — the clean solution loops the byproduct back into something useful.
 

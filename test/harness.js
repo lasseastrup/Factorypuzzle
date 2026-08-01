@@ -2079,3 +2079,106 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 14900);
+
+/* --- junctions must pass material through, not buffer it ---
+   Each belt used to spawn and drain on its own rate accumulator, with nothing physically
+   handed across a splitter. The two sides agreed on average, so it mostly looked right,
+   but the accumulators drifted in and out of phase: a queue built at the junction, then
+   two items were admitted at once, then a pause. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- junction flow ---');
+
+  const setup = () => {
+    api.loadLevel(6);
+    const lv = api.LEVELS[6];
+    const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+    const sp = api.addEntity('splitter', 9, 3, 0);
+    const s1 = api.addEntity('smelter', 14, 2, 1);
+    const s2 = api.addEntity('smelter', 14, 6, 1);
+    const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
+    api.resolve();
+    api.armBelt(1); api.connectByTap(m, sp);
+    api.armBelt(1); api.connectByTap(sp, s1);
+    api.armBelt(1); api.connectByTap(sp, s2);
+    api.armBelt(1); api.connectByTap(s1, depot);
+    api.armBelt(1); api.connectByTap(s2, depot);
+    api.resolve();
+    return { m, sp, s1, s2, depot };
+  };
+
+  let t = performance.now();
+  const run = (secs) => { for (let i = 0; i < secs / 0.04; i++) { t += 40; api.frame(t); } };
+
+  const s = setup();
+  const inL = api.links().find((l) => l.to === s.sp.id);
+  const outs = api.links().filter((l) => l.from === s.sp.id);
+  run(8);
+
+  ok(Math.abs(inL.flow - 60) < 1e-6 && outs.every((o) => Math.abs(o.flow - 30) < 1e-6),
+    `60 in splits to ${outs.map((o) => o.flow.toFixed(0)).join('/')}`);
+
+  /* nothing should sit waiting at an unblocked junction */
+  let worstQueue = 0, high = 0, low = Infinity;
+  for (let k = 0; k < 60; k++) {
+    run(0.4);
+    worstQueue = Math.max(worstQueue, api.queuedOn(inL));
+    high = Math.max(high, inL.items.length);
+    low = Math.min(low, inL.items.length);
+  }
+  ok(worstQueue === 0, `nothing queues at an unblocked splitter (worst ${worstQueue})`);
+  ok(high - low <= 2, `the inbound belt stays steady rather than surging (${low}..${high} items)`);
+
+  /* the split must match the rates the solver worked out */
+  const sent = outs.map((o) => o.sent || 0);
+  const spread = Math.abs(sent[0] - sent[1]) / Math.max(1, sent[0] + sent[1]);
+  ok(spread < 0.12, `both branches take their share (${sent.join(' / ')})`);
+
+  /* and material is conserved: transfers out match arrivals in */
+  const before = outs.reduce((n, o) => n + (o.sent || 0), 0);
+  run(20);
+  const moved = outs.reduce((n, o) => n + (o.sent || 0), 0) - before;
+  ok(Math.abs(moved - 20) <= 3, `20 s at 60/min moved ${moved} items through (expected ~20)`);
+
+  /* a branch the solver gives nothing to must receive nothing */
+  const s2b = setup();
+  const outs2 = api.links().filter((l) => l.from === s2b.sp.id);
+  const feed = api.links().find((l) => l.to === s2b.sp.id);
+  api.deleteLink(api.links().find((l) => l.from === s2b.s1.id));   /* strand one smelter */
+  api.resolve();
+  run(25);
+  const dead = outs2.find((o) => (o.flow || 0) < 1e-6);
+  const alive = outs2.find((o) => (o.flow || 0) > 1e-6);
+  ok(!!dead && !!alive, `one branch stalls and one keeps running (${outs2.map((o) => o.flow.toFixed(0)).join('/')})`);
+  if (dead && alive) {
+    const deadSent = dead.sent || 0;
+    run(10);
+    ok((dead.sent || 0) === deadSent, 'the stalled branch is sent nothing further');
+    ok(alive.items.length > 0, 'while the working branch keeps carrying');
+  }
+
+  /* a merger is the same thing in reverse */
+  api.loadLevel(6);
+  const lv = api.LEVELS[6];
+  const a = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const b = api.addEntity('miner', lv.nodes[1].x, lv.nodes[1].z, 0);
+  const mg = api.addEntity('merger', 9, 6, 0);
+  const dp = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
+  api.resolve();
+  api.armBelt(1); api.connectByTap(a, mg);
+  api.armBelt(1); api.connectByTap(b, mg);
+  api.armBelt(2); api.connectByTap(mg, dp);
+  api.resolve();
+  const mOut = api.links().find((l) => l.from === mg.id);
+  const mIns = api.links().filter((l) => l.to === mg.id);
+  run(12);
+  let mq = 0;
+  for (let k = 0; k < 40; k++) { run(0.4); mq = Math.max(mq, Math.max(...mIns.map((l) => api.queuedOn(l)))); }
+  ok(mq === 0, `nothing queues at an unblocked merger (worst ${mq})`);
+  ok(mOut.items.length > 0 && (mOut.sent || 0) > 10,
+    `the combined belt carries ${mOut.items.length} items, ${mOut.sent} transferred`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 15400);

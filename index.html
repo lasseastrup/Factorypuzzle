@@ -2610,39 +2610,102 @@ function posAt(l, s) {
    so an arriving item slid over the queue and then snapped to a lattice position up
    to one whole spacing further back. Simulating the items directly removes the seam
    because there is no longer a seam — there is one list. */
+/* ---- moving material along, and across junctions ----
+   Every belt owns a list of item positions. The subtlety is what happens at a splitter or
+   merger: those have no length and no storage, so an item arriving at one should simply
+   continue onto an outgoing belt.
+
+   Previously each belt spawned and drained on its own rate accumulator, and nothing was
+   physically handed across the junction. The two sides agreed on average, which is why it
+   mostly looked right — but an item could be consumed from the inbound belt with no item
+   appearing beyond it, and the accumulators drifted in and out of phase. That read exactly
+   as reported: a queue building at the splitter, then two items admitted at once, then a
+   pause. Junctions now transfer the item itself, so a queue can only form when an outgoing
+   belt genuinely has no room. */
+const passKind = (k) => k === 'splitter' || k === 'merger' || k === 'pass';
+const backRoom = (l) => !l.items || !l.items.length || l.items[l.items.length - 1] >= JAM_SPACING;
+
+/* Choose which way an item goes, honouring the split the solver worked out: whichever
+   branch is furthest behind its share takes it. Round-robin alone would divide 40/20
+   evenly and quietly contradict the simulation. */
+function pickBranch(outs) {
+  let best = null, bestScore = Infinity;
+  for (const o of outs) {
+    if ((o.flow || 0) <= 1e-6 || !backRoom(o)) continue;
+    if (o.sent == null) o.sent = 0;
+    const score = o.sent / o.flow;
+    if (score < bestScore) { bestScore = score; best = o; }
+  }
+  return best;
+}
+
 function advanceBelts(dt) {
+  const outsOf = new Map();
+  for (const l of links) {
+    if (!outsOf.has(l.from)) outsOf.set(l.from, []);
+    outsOf.get(l.from).push(l);
+  }
+
   for (const l of links) {
     if (!l.items) l.items = [];
     if (l.spawnAcc == null) l.spawnAcc = 0;
     if (l.drainAcc == null) l.drainAcc = 0;
-    const len = l.length;
-    const items = l.items;
+  }
 
-    /* the destination removes material at the rate it actually consumes */
-    l.drainAcc = Math.min(2, l.drainAcc + ((l.drain || 0) / 60) * dt);
-    const intoDepot = MACHINES[(entById(l.to) || {}).type || ''] &&
-                      MACHINES[entById(l.to).type].kind === 'sink';
-    while (items.length && items[0] >= len - 1e-3 && l.drainAcc >= 1) {
-      items.shift();
-      l.drainAcc -= 1;
-      if (intoDepot && l.item) deliveries.push({ item: l.item, t: clockT });
-    }
-
-    /* advance, never overtaking the item ahead */
+  /* advance every item, never overtaking the one ahead */
+  for (const l of links) {
+    const items = l.items, len = l.length;
     for (let i = 0; i < items.length; i++) {
       const limit = i === 0 ? len : items[i - 1] - JAM_SPACING;
       items[i] = Math.min(items[i] + BELT_SPEED * dt, limit);
       if (items[i] < 0) items[i] = 0;
     }
+  }
 
-    /* put new material on at the source, if there is room at the back */
+  /* take material off the far end: either handed across a junction, or consumed */
+  for (const l of links) {
+    const items = l.items, len = l.length;
+    const dest = entById(l.to);
+    const dk = dest && MACHINES[dest.type] ? MACHINES[dest.type].kind : null;
+    const outs = (dest && outsOf.get(dest.id)) || [];
+    const junction = passKind(dk) && outs.length > 0;
+
+    if (junction) {
+      /* a splitter holds nothing: the item continues, or it waits on the belt */
+      let guard = 0;
+      while (items.length && items[0] >= len - 1e-3 && guard++ < 4) {
+        const target = pickBranch(outs);
+        if (!target) break;
+        items.shift();
+        target.items.push(0);
+        target.sent = (target.sent || 0) + 1;
+        if (!target.item && l.item) target.item = l.item;
+      }
+      continue;
+    }
+
+    /* a machine or the depot consumes at the rate it actually uses */
+    l.drainAcc = Math.min(2, l.drainAcc + ((l.drain || 0) / 60) * dt);
+    const intoDepot = dk === 'sink';
+    while (items.length && items[0] >= len - 1e-3 && l.drainAcc >= 1) {
+      items.shift();
+      l.drainAcc -= 1;
+      if (intoDepot && l.item) deliveries.push({ item: l.item, t: clockT });
+    }
+  }
+
+  /* Put new material on, but only where a machine is actually making it. A belt leaving a
+     junction is fed by transfer; spawning there as well would invent material. */
+  for (const l of links) {
+    const src = entById(l.from);
+    const sk = src && MACHINES[src.type] ? MACHINES[src.type].kind : null;
+    if (passKind(sk)) { l.spawnAcc = 0; continue; }
     const live = isFinite(l.startT) && clockT >= l.startT;
     l.spawnAcc = Math.min(3, l.spawnAcc + (live ? ((l.flow || 0) / 60) * dt : 0));
     while (l.spawnAcc >= 1) {
-      const back = items.length ? items[items.length - 1] : Infinity;
-      if (back < JAM_SPACING) break;          /* belt is full at the input end */
-      if (items.length >= Math.ceil(len / JAM_SPACING) + 1) break;
-      items.push(0);
+      if (!backRoom(l)) break;
+      if (l.items.length >= Math.ceil(l.length / JAM_SPACING) + 1) break;
+      l.items.push(0);
       l.spawnAcc -= 1;
     }
   }
