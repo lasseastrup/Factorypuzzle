@@ -175,12 +175,12 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'flowSignature',
   'keepItemTags',
   'spliceJunction',
-  'nearestFreeSpot',
   'orientPair',
   'beltAt',
   'isJunction',
   'layBelt',
-  'straightRaw'];
+  'straightRaw',
+  'spliceSpot'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
@@ -2422,8 +2422,19 @@ setTimeout(() => {
   const js = api.ents().filter((e) => e.type === 'junction');
   ok(js.length === 1, 'with exactly one junction');
   const jx = js[0];
-  ok(Math.abs(jx.x - Math.round(jx.x - 0.5) - 0.5) < 1e-6 && Math.abs(jx.z - Math.round(jx.z - 0.5) - 0.5) < 1e-6,
-    `and it lands on the metre grid (${jx.x}, ${jx.z})`);
+  /* A junction sits ON the belt, so it can only be grid-aligned along the belt's direction —
+     across it, it is wherever the belt runs. Demanding both axes was demanding the belt move,
+     which is the very thing that made runs change shape. What matters is that it is on the
+     belt and tidy in the axis where tidiness is available. */
+  const onGridAxis = Math.abs(jx.x - Math.round(jx.x - 0.5) - 0.5) < 1e-6
+    || Math.abs(jx.z - Math.round(jx.z - 0.5) - 0.5) < 1e-6;
+  ok(onGridAxis, `and it is grid-aligned along the belt (${jx.x}, ${jx.z})`);
+  const belts = api.links().filter((l) => l.from === jx.id || l.to === jx.id);
+  const sits = belts.every((l) => {
+    const end = l.from === jx.id ? l.path[0] : l.path[l.path.length - 1];
+    return Math.hypot(end.x - jx.x, end.z - jx.z) < 1e-6;
+  });
+  ok(sits, 'with every belt at it meeting exactly on the point');
   const outs = api.links().filter((l) => l.from === jx.id);
   const ins = api.links().filter((l) => l.to === jx.id);
   ok(ins.length === 1 && outs.length === 2, `wired one in and two out (${ins.length}/${outs.length})`);
@@ -2695,3 +2706,98 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 17900);
+
+/* --- splicing must not refuse, and must not reshape ---
+   canPlace treats belts as obstacles, so the belt being spliced blocked its own junction:
+   every candidate position is by definition a point on that belt. Splices were refused as
+   'no room' even with the plot empty around them, and the fallback search then dragged the
+   junction one to three metres off the belt — which is why the run changed shape when a
+   splice did happen to succeed. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- splicing an existing belt ---');
+
+  api.loadLevel(5);
+  const design = api.newDesign('Splice');
+  api.editDesign(design);
+  const room = api.getCtx();
+
+  const feed = api.addEntity('termIn', 1, 1, 1);
+  feed.wall = 'w'; feed.index = 0;
+  const build = () => {
+    for (const e of api.ents().slice()) if (e !== feed) api.removeEntityById(e.id);
+    /* a belt hugging the wall, which is the reported situation */
+    const far = api.addEntity('smelter', 10, 1.5, 1);
+    const side = api.addEntity('smelter', 7, 7, 1);
+    api.resolve();
+    api.armBelt(1);
+    api.connectByTap(feed, far);
+    api.resolve();
+    return { far, side, trunk: api.links()[0] };
+  };
+
+  let b = build();
+  ok(!!b.trunk, 'a belt can run along the wall');
+  const hugsWall = Math.min(...b.trunk.path.map((q) => q.z)) < 1.2;
+  ok(hugsWall, `and it does hug it (closest approach z=${Math.min(...b.trunk.path.map((q) => q.z)).toFixed(2)})`);
+
+  /* the belt itself must not block its own junction */
+  const mid = b.trunk.path[Math.floor(b.trunk.path.length / 2)];
+  ok(!!api.canPlace('junction', mid.x, mid.z, 0),
+    'a point on the belt is refused when the belt counts as an obstacle');
+  ok(!api.canPlace('junction', mid.x, mid.z, 0, null, b.trunk),
+    'but allowed once that belt is discounted');
+
+  const spot = api.spliceSpot(b.trunk, mid);
+  ok(!!spot, 'so a spot is found along the wall-hugging belt');
+  if (spot) {
+    const onPath = b.trunk.path.some((q) => Math.hypot(q.x - spot.point.x, q.z - spot.point.z) < 1e-9);
+    ok(onPath, `and it lies exactly on the belt (${spot.point.x}, ${spot.point.z})`);
+    const arc = b.trunk.arc;
+    ok(arc[spot.index] > 0.9 && arc[spot.index] < b.trunk.length - 0.9,
+      `clear of both ends, so each half is a real belt (${arc[spot.index].toFixed(1)} of ${b.trunk.length.toFixed(1)} m)`);
+  }
+
+  /* the splice must leave the original run's shape untouched */
+  b = build();
+  const shapeBefore = b.trunk.path.map((q) => q.x.toFixed(3) + ',' + q.z.toFixed(3)).join(' ');
+  const lenBefore = b.trunk.length;
+  const at = b.trunk.path[Math.floor(b.trunk.path.length / 2)];
+  ok(api.spliceJunction(b.trunk, at, b.side, null), `the wall-hugging belt can be branched (${JSON.stringify(api.getToast())})`);
+  api.resolve();
+  const j = api.ents().find((e) => e.type === 'junction');
+  ok(!!j, 'a junction is created');
+  if (j) {
+    const head = api.links().find((l) => l.to === j.id);
+    const tail = api.links().find((l) => l.from === j.id && l.to === b.far.id);
+    ok(!!head && !!tail, 'with the original run split in two');
+    if (head && tail) {
+      const rejoined = head.path.concat(tail.path.slice(1)).map((q) => q.x.toFixed(3) + ',' + q.z.toFixed(3)).join(' ');
+      ok(rejoined === shapeBefore, 'and the two halves reproduce the original path exactly');
+      ok(Math.abs(head.length + tail.length - lenBefore) < 0.05,
+        `their lengths add back up (${(head.length + tail.length).toFixed(2)} vs ${lenBefore.toFixed(2)} m)`);
+      const jOnHead = Math.hypot(head.path[head.path.length - 1].x - j.x, head.path[head.path.length - 1].z - j.z);
+      ok(jOnHead < 1e-9, 'the halves meet exactly at the junction');
+    }
+    const outs = api.links().filter((l) => l.from === j.id);
+    const ins = api.links().filter((l) => l.to === j.id);
+    ok(outs.length === 2 && ins.length === 1,
+      `wired one in and two out (${ins.length}/${outs.length})`);
+    /* No rates are asserted here: this is a design being edited, not a placed instance, so
+       its input terminal has nothing upstream and every flow is legitimately zero. Junction
+       throughput is covered where a factory is actually running. */
+    ok(api.links().length === 3, `three belts in total (${api.links().length})`);
+  }
+
+  /* the preview must aim at the same place the splice will use */
+  b = build();
+  const at2 = b.trunk.path[Math.floor(b.trunk.path.length / 3)];
+  const s1 = api.spliceSpot(b.trunk, at2);
+  const s2 = api.spliceSpot(b.trunk, at2);
+  ok(!!s1 && !!s2 && s1.index === s2.index, 'the spot is deterministic, so the preview matches the result');
+
+  api.exitContext();
+  console.log(`\n${p} passed, ${f} failed`);
+}, 18400);

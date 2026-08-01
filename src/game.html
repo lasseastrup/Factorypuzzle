@@ -961,7 +961,7 @@ function makeSprite(text) {
 /* ============================================================
    PLACEMENT
    ============================================================ */
-function canPlace(type, x, z, rot, ignore) {
+function canPlace(type, x, z, rot, ignore, ignoreLink) {
   const probe = { type, x, z, rot };
   if (MACHINES[type].wallFixture) {
     /* A wall fixture is meant to be flush with the boundary, so the margin the plot
@@ -981,6 +981,11 @@ function canPlace(type, x, z, rot, ignore) {
   }
   const bi = boxOf(probe, BELT_HW);
   for (const l of links) {
+    /* The belt being spliced cannot be an obstacle to its own junction. Without this, every
+       splice was refused as 'no room' — the candidate position is by definition a point on
+       that belt — and the fallback search then dragged the junction one to three metres OFF
+       the belt, which is what made the run change shape when a splice did succeed. */
+    if (l === ignoreLink) continue;
     for (const p of l.path) if (inBox(p, bi)) return 'A belt runs through there.';
   }
   if (MACHINES[type].kind === 'miner') {
@@ -1440,7 +1445,7 @@ function finishStroke(raw, a, aPort, b, bPort) {
    failure messages. There was briefly a second path for branches which auto-routed a
    straight line and threw away the drawn shape; nothing good comes of a game having two
    ways to make the same object. */
-function layBelt(a, b, raw, aPortHint) {
+function layBelt(a, b, raw, aPortHint, fixedPath) {
   if (!a || !b || a === b) return false;
 
   /* If it was drawn the wrong way round, turn it round rather than refusing, and reverse
@@ -1462,9 +1467,13 @@ function layBelt(a, b, raw, aPortHint) {
   const aPort = (src === a && aPortHint != null) ? aPortHint : Math.max(0, freeOutPort(src));
   if (bPort < 0 || aPort < 0) { toast('No free port for that.'); return false; }
 
-  const pts = finishStroke(path0, src, aPort, dst, bPort);
-  const blocked = routeBlocked(pts, src, dst);
-  if (blocked) { toast(blocked); return false; }
+  /* A fixed path is used verbatim: it is a piece of a belt that already existed and was
+     already validated, and re-routing it is precisely what must not happen. */
+  const pts = fixedPath || finishStroke(path0, src, aPort, dst, bPort);
+  if (!fixedPath) {
+    const blocked = routeBlocked(pts, src, dst);
+    if (blocked) { toast(blocked); return false; }
+  }
   const arc = arcTable(pts);
   const len = arc[arc.length - 1];
   if (len < 0.4) { toast('Too short to be a belt.'); return false; }
@@ -3218,10 +3227,10 @@ function drawStrokePreview() {
        junction does not exist yet, so a probe stands in for it — and a second probe stands in
        for the finger when it is not yet over a machine. Both are junction-shaped, which means
        both ends resolve to points and the route comes out exactly as it will. */
-    const spot = nearestFreeSpot('junction', stroke.at.x, stroke.at.z);
+    const spot = spliceSpot(stroke.fromBelt, stroke.at);
     if (!spot) return;
     const tip = stroke.pts[stroke.pts.length - 1] || stroke.at;
-    const probeSrc = { id: '_pj', type: 'junction', x: spot.x, z: spot.z, rot: 0 };
+    const probeSrc = { id: '_pj', type: 'junction', x: spot.point.x, z: spot.point.z, rot: 0 };
     const target = entAt(tip) || { id: '_pt', type: 'junction', x: tip.x, z: tip.z, rot: 0 };
     let pts = null;
     try { pts = buildOrthoPath(stroke.pts, probeSrc, 0, target, 0); } catch (err) { pts = null; }
@@ -3322,18 +3331,63 @@ function repairInputSlots() {
 
    Everything is snapshotted first, because a half-applied splice — original belt gone, new
    ones refused — would be far worse than a refusal. */
-function nearestFreeSpot(type, x, z) {
-  const base = snapPlacement(type, x, z, 0);
-  if (!canPlace(type, base.x, base.z, 0)) {
-    for (let r = 1; r <= 3; r++) {
-      for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]]) {
-        const c = { x: base.x + dx, z: base.z + dz };
-        if (!canPlace(type, c.x, c.z, 0)) return c;
-      }
-    }
-    return null;
+/* Where along a belt a junction can sit.
+
+   It must be ON the belt: a junction anywhere else forces both halves of the run to deviate
+   to reach it, which is what changed the shape of a belt the player had carefully drawn. So
+   the candidates are the belt's own path points, ordered by closeness to the grid-snapped
+   position the player aimed at — which on an orthogonal run is usually exact — and the search
+   walks along the belt rather than away from it. */
+function spliceSpot(link, at) {
+  const path = link.path;
+  if (!path || path.length < 3) return null;
+  const aim = snapPlacement('junction', at.x, at.z, 0);
+  const arc = link.arc || arcTable(path);
+
+  /* Project the grid position onto the belt rather than taking the nearest existing vertex.
+     On an orthogonal run the grid point lies exactly on the path, so the junction ends up
+     both on the grid and on the belt — the two goals only appeared to conflict because the
+     path is sampled every 0.3 m and no vertex happened to sit on the grid. */
+  let best = null;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1], b = path[i];
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const L2 = dx * dx + dz * dz;
+    if (L2 < 1e-12) continue;
+    let t = ((aim.x - a.x) * dx + (aim.z - a.z) * dz) / L2;
+    t = Math.max(0, Math.min(1, t));
+    const p = { x: a.x + dx * t, z: a.z + dz * t };
+    const along = arc[i - 1] + Math.sqrt(L2) * t;
+    /* leave room at both ends, or one half would be too short to be a belt */
+    if (along < 0.9 || along > link.length - 0.9) continue;
+    const d = dist2(p, aim);
+    if (!best || d < best.d) best = { d, p, i };
   }
-  return base;
+  if (!best) return null;
+
+  /* If something else genuinely occupies that point — a machine the belt runs past — walk
+     along the belt looking for a clear spot, never away from it. */
+  let point = best.p, cut = best.i;
+  if (canPlace('junction', point.x, point.z, 0, null, link)) {
+    let found = null;
+    const order = path.map((p, i) => i)
+      .filter((i) => arc[i] > 0.9 && arc[i] < link.length - 0.9)
+      .sort((a, b) => dist2(path[a], aim) - dist2(path[b], aim));
+    for (const i of order) {
+      if (!canPlace('junction', path[i].x, path[i].z, 0, null, link)) { found = i; break; }
+    }
+    if (found == null) return null;
+    point = { x: path[found].x, z: path[found].z };
+    cut = found;
+  }
+
+  /* Split the path at that point, inserting it as a vertex. The halves are then exact
+     sub-paths of the original, so the run the player drew is unchanged. */
+  const dedupe = (pts) => pts.filter((p, i) => i === 0 || dist2(p, pts[i - 1]) > 1e-12);
+  const head = dedupe(path.slice(0, cut).concat([{ x: point.x, z: point.z }]));
+  const tail = dedupe([{ x: point.x, z: point.z }].concat(path.slice(cut)));
+  if (head.length < 2 || tail.length < 2) return null;
+  return { point, index: cut, head, tail };
 }
 
 function spliceJunction(link, at, other, raw) {
@@ -3341,8 +3395,8 @@ function spliceJunction(link, at, other, raw) {
   if (!src || !dst) return false;
   if (other === src || other === dst) { toast('That is already on this belt.'); return false; }
 
-  const spot = nearestFreeSpot('junction', at.x, at.z);
-  if (!spot) { toast('No room for a junction there.'); return false; }
+  const spot = spliceSpot(link, at);
+  if (!spot) { toast('No room for a junction along that belt.'); return false; }
 
   const keepLinks = links.slice(), keepEnts = ents.slice();
   const tier = link.tier;
@@ -3351,16 +3405,18 @@ function spliceJunction(link, at, other, raw) {
     ents.length = 0; for (const e of keepEnts) ents.push(e);
   };
 
+  /* Split the original path at the junction rather than re-routing the halves. Re-routing
+     them replaced a run the player had shaped by hand with two straight lines, which is the
+     'the belt changed shape' complaint. A sub-path of an already valid belt is still valid. */
+  const head = spot.head, tail = spot.tail;
+
   dropWhere(links, (l) => l === link);
-  const j = addEntity('junction', spot.x, spot.z, 0);
+  const j = addEntity('junction', spot.point.x, spot.point.z, 0);
   const prevTier = beltTier;
   beltTier = tier;
 
-  /* The two halves of the original run were not drawn by anyone, so they are routed
-     straight. The new branch WAS drawn, so it keeps its shape — through the same router,
-     the same validation and the same failure messages as any other belt. */
-  const ok1 = layBelt(src, j, straightRaw(src, j), null);
-  const ok2 = ok1 && layBelt(j, dst, straightRaw(j, dst), null);
+  const ok1 = layBelt(src, j, null, null, head);
+  const ok2 = ok1 && layBelt(j, dst, null, null, tail);
   let ok3 = false;
   if (ok2) {
     const pair = orientPair(j, other);

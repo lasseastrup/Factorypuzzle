@@ -82,6 +82,15 @@ The threshold never rounds up. A stream at R per minute puts at least `floor(R �
 
   It is **not in the tray at all**. You get one by dragging off an existing belt — the junction is spliced in, snapped to the metre grid, and the three resulting runs are re-routed. Dragging a machine *onto* a belt does the same thing and merges instead. This is a better fit for how the puzzle is actually played: you lay a line, then realise you need to feed something else from it. Placing a splitter first and routing into it is planning the plumbing before you know the shape.
 
+  **A junction sits on the belt, and splicing never reshapes it.** The two halves of the original run are exact sub-paths of it, split at the junction, not re-routed. Re-routing them replaced a run the player had shaped by hand with two straight lines.
+
+  Two mistakes here are worth recording because they had the same origin — treating the belt being spliced as if it were any other belt:
+
+  - `canPlace` counts belts as obstacles, so the belt being spliced blocked its own junction: every candidate position is by definition a point on that belt. Splices were refused as "no room" with the plot empty around them. It now takes a link to discount.
+  - The fallback search for a clear position then moved the junction one to three metres *off* the belt, which is what made the run change shape on the splices that did succeed. The search now walks *along* the belt and never away from it.
+
+  Grid snapping applies **along** the belt only. The aimed-at grid position is projected onto the path, so on an orthogonal run the junction lands exactly on the grid and exactly on the belt; across the belt it goes wherever the belt runs, because the alternative is moving the belt. Two goals that looked like they conflicted mostly did not — the path is sampled every 0.3 m, so no *vertex* sat on the grid even when the line passed straight through it.
+
   **A branch is laid by the same code as any other belt.** There is one `layBelt`: every route in — a drag from a machine, two taps, or a branch off an existing belt — arrives with a source, a destination and the shape the player drew, and gets the same router, the same validation and the same failure messages. The preview goes through the same router too, standing a probe in for the not-yet-existent junction, so what is shown is what lands.
 
   This is worth stating because the first implementation had a second path: it auto-routed a straight line for the branch and discarded the shape that had just been drawn. It worked, which is what made it easy to miss. A game with two ways to make the same object will eventually have two sets of bugs in it, and the drawn shape mattering everywhere except one place is exactly the sort of inconsistency a player notices without being able to name.
