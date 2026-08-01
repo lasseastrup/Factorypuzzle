@@ -1430,11 +1430,22 @@ function commitStroke(raw, endPoint, pickedEnd) {
     b = best;
   }
   if (!b) return toast('End the stroke on a machine.');
-  const pe = portError(a, b, item);
-  if (pe) return toast(pe);
-  const bPort = freeInPort(b, item), aPort = stroke.fromPort;
-  const pts = finishStroke(raw, a, aPort, b, bPort);
-  const blocked = routeBlocked(pts, a, b);
+  /* If the stroke was drawn the wrong way round, turn it round rather than refusing. The
+     path itself is reversed so the belt still follows what was drawn. */
+  let src = a, dst = b, path0 = raw;
+  if (portError(src, dst, outItemOf(src))) {
+    if (!portError(dst, src, outItemOf(dst))) {
+      src = b; dst = a;
+      path0 = raw.slice().reverse();
+      toast('Connected ' + MACHINES[src.type].name + ' \u2192 ' + MACHINES[dst.type].name);
+    } else {
+      return toast(portError(a, b, item));
+    }
+  }
+  const item2 = outItemOf(src);
+  const bPort = freeInPort(dst, item2), aPort = src === a ? stroke.fromPort : Math.max(0, freeOutPort(src));
+  const pts = finishStroke(path0, src, aPort, dst, bPort);
+  const blocked = routeBlocked(pts, src, dst);
   if (blocked) return toast(blocked);
   const arc = arcTable(pts);
   const len = arc[arc.length - 1];
@@ -1442,9 +1453,9 @@ function commitStroke(raw, endPoint, pickedEnd) {
   const tier = BELTS.find((t) => t.id === beltTier) || BELTS[0];
   /* For a factory the port slot and the terminal index are different things: slots
      are ordered for the UI, indices identify the terminal inside. */
-  const fp = MACHINES[a.type].kind === 'factory' ? (factoryPorts(a).outIdx[aPort] || 0) : aPort;
-  const tp = MACHINES[b.type].kind === 'factory' ? (factoryPorts(b).inIdx[bPort] || 0) : bPort;
-  links.push({ id: 'l' + (nextId++), from: a.id, to: b.id, fromPort: fp, toPort: tp,
+  const fp = MACHINES[src.type].kind === 'factory' ? (factoryPorts(src).outIdx[aPort] || 0) : aPort;
+  const tp = MACHINES[dst.type].kind === 'factory' ? (factoryPorts(dst).inIdx[bPort] || 0) : bPort;
+  links.push({ id: 'l' + (nextId++), from: src.id, to: dst.id, fromPort: fp, toPort: tp,
                slotFrom: aPort, slotTo: bPort,
                cap: tier.cap, tier: tier.id, path: pts, arc, length: len, bumps: [] });
   computeCrossings();
@@ -1640,7 +1651,7 @@ function buildMachines() {
 
     /* seat it: a soft contact blob, then a low plinth so the body does not simply
        intersect the floor at a hard line */
-    if (def.kind !== 'pass') {
+    if (def.kind !== 'pass' && def.kind !== 'splitter' && def.kind !== 'merger') {
       g.add(contactShadow(w, d));
       const plinth = new THREE.Mesh(GRAD(new THREE.BoxGeometry(w + 0.14, 0.1, d + 0.14)),
         MATG(0x6f7269));
@@ -1712,8 +1723,14 @@ function buildMachines() {
       part(g, new THREE.BoxGeometry(0.34, 0.2, 0.4), MATG(DARK), 0, 0.4, d / 2 - 0.1);
 
     } else if (def.kind === 'splitter' || def.kind === 'merger') {
-      part(g, new THREE.CylinderGeometry(0.46, 0.5, 0.3, 6), body, 0, 0.15, 0);
-      part(g, new THREE.CylinderGeometry(0.2, 0.2, 0.1, 8), MET(STEEL), 0, 0.33, 0);
+      /* A junction is a fitting, not a machine. It was a hexagonal drum nearly as tall as
+         a smelter, which made a line of them look like a row of buildings; it is now a low
+         plate that reads as part of the belt run. */
+      part(g, new THREE.BoxGeometry(0.66, 0.1, 0.66), MET(0x6a7076), 0, 0.29, 0);
+      part(g, new THREE.BoxGeometry(0.44, 0.06, 0.44), MET(0x9aa1a6), 0, 0.35, 0);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        part(g, new THREE.BoxGeometry(0.07, 0.26, 0.07), MATG(DARK), sx * 0.27, 0.13, sz * 0.27);
+      }
 
     } else if (def.kind === 'factory') {
       /* a shell, deliberately blank: what matters is inside */
@@ -3165,12 +3182,27 @@ function repairInputSlots() {
   }
 }
 
+/* Which way round should a belt between these two go? The drawn direction wins when it is
+   legal, because that is what the player asked for. When it is not — dragging from a
+   junction to a miner, or out of an output that is already used — the reverse is tried
+   before giving up. Only one direction is ever possible in those cases, so making the
+   player discover which is busywork.
+
+   Returns [source, destination] or null if neither direction works. */
+function orientPair(a, b) {
+  if (!portError(a, b, outItemOf(a))) return [a, b];
+  if (!portError(b, a, outItemOf(b))) return [b, a];
+  return null;
+}
+
 /* Lay a belt from two taps by synthesising the stroke a drag would have produced, so
    both routes end in exactly the same routing and validation code. */
-function connectByTap(a, b) {
+function connectByTap(a0, b0) {
+  const pair = orientPair(a0, b0);
+  if (!pair) { toast(portError(a0, b0, outItemOf(a0)) || 'Those cannot be connected.'); return false; }
+  const a = pair[0], b = pair[1];
+  if (a !== a0) toast('Connected ' + MACHINES[a.type].name + ' \u2192 ' + MACHINES[b.type].name);
   const item = outItemOf(a);
-  const pe = portError(a, b, item);
-  if (pe) { toast(pe); return false; }
   const aPort = freeOutPort(a), bPort = freeInPort(b, item);
   if (aPort < 0 || bPort < 0) { toast('No free port for that.'); return false; }
   const E0 = beltEnds(a, aPort, b, bPort, null);

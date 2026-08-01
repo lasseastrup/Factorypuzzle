@@ -2274,3 +2274,99 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 15900);
+
+/* --- a belt works out which way round it goes --- */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- connection direction ---');
+
+  api.loadLevel(6);
+  const lv = api.LEVELS[6];
+  const setup = () => {
+    api.clearPlot();
+    return {
+      m: api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0),
+      sp: api.addEntity('splitter', 9, 4, 0),
+      sm: api.addEntity('smelter', 14, 4, 1),
+      dp: api.ents().find((e) => api.MACHINES[e.type].kind === 'sink'),
+    };
+  };
+
+  /* drawn the natural way: miner -> junction */
+  let s = setup();
+  api.resolve();
+  ok(api.connectByTap(s.m, s.sp), 'miner to junction connects');
+  let l = api.links()[api.links().length - 1];
+  ok(l.from === s.m.id && l.to === s.sp.id, 'and keeps the direction it was drawn');
+
+  /* drawn backwards: junction -> miner. A miner can only be a source, so it must flip */
+  s = setup();
+  api.resolve();
+  ok(api.connectByTap(s.sp, s.m), 'junction to miner is accepted');
+  l = api.links()[api.links().length - 1];
+  ok(l.from === s.m.id && l.to === s.sp.id,
+    `and is turned round, because a miner can only supply (${l.from === s.m.id ? 'miner -> junction' : 'wrong way'})`);
+
+  /* drawn backwards the other way: depot -> junction. A depot can only receive.
+     Built with nothing else on the plot, so a blocked route cannot be mistaken for a
+     refused direction — an earlier version of this test put a smelter across the path. */
+  api.clearPlot();
+  const sp2 = api.addEntity('splitter', 24, 6, 0);
+  const dp2 = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
+  api.resolve();
+  ok(api.connectByTap(dp2, sp2), `depot to junction is accepted (${JSON.stringify(api.getToast())})`);
+  l = api.links()[api.links().length - 1];
+  ok(!!l && l.from === sp2.id && l.to === dp2.id, 'and turned round, because a depot can only receive');
+
+  /* Where both directions are legal the drawn one must win. A junction and a machine
+     qualify: an unfed junction carries nothing identifiable, so it can equally be the
+     source or the destination. (Two smelters do NOT qualify — a smelter has no use for
+     ingots, so that pair is illegal both ways.) */
+  api.clearPlot();
+  const jx = api.addEntity('splitter', 12, 6, 0);
+  const smA = api.addEntity('smelter', 17, 6, 1);
+  api.resolve();
+  ok(!api.portError(jx, smA, api.outItemOf(jx)), 'junction to smelter is legal');
+  ok(!api.portError(smA, jx, api.outItemOf(smA)), 'and smelter to junction is legal too');
+  ok(api.connectByTap(jx, smA), 'drawn junction to smelter');
+  l = api.links()[api.links().length - 1];
+  ok(!!l && l.from === jx.id && l.to === smA.id,
+    'the drawn direction is respected rather than second-guessed');
+
+  /* genuinely impossible pairs still fail, with a reason */
+  api.clearPlot();
+  const mA = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const mB = api.addEntity('miner', lv.nodes[1].x, lv.nodes[1].z, 0);
+  api.resolve();
+  ok(!api.connectByTap(mA, mB), 'two miners cannot be connected');
+  ok(api.getToast().length > 0, `and the refusal explains itself (${JSON.stringify(api.getToast())})`);
+
+  /* the junction model should be a fitting, not a building */
+  const fit = setup();
+  api.resolve();
+  api.buildMachines();
+  const grp = api.gMachines.children.find((gr) => gr.userData.ent === fit.sp);
+  let top = 0;
+  grp.traverse((o) => { if (o.isMesh && o.geometry.boundingBox !== undefined) { /* measured below */ } });
+  const THREE2 = require('three');
+  /* Solid parts only. Measuring the whole group would include the bobbing drag-hint arrow
+     and the contact shadow, which are affordances rather than the model. */
+  const solidTop = (group) => {
+    let hi = -Infinity;
+    group.updateMatrixWorld(true);
+    group.traverse((o) => {
+      if (!o.isMesh || o.material.transparent) return;
+      hi = Math.max(hi, new THREE2.Box3().setFromObject(o).max.y);
+    });
+    return hi;
+  };
+  top = solidTop(grp);
+  const smGrp = api.gMachines.children.find((gr) => gr.userData.ent === fit.sm);
+  const smTop = solidTop(smGrp);
+  ok(top < smTop * 0.55, `a junction is much shorter than a machine (${top.toFixed(2)} m vs ${smTop.toFixed(2)} m)`);
+  ok(top < api.BELT_Y + 0.25, `and sits close to belt height (${top.toFixed(2)} vs belt ${api.BELT_Y})`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 16400);
