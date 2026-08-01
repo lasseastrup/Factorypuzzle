@@ -131,13 +131,22 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'finishStroke',
   'snapToWall',
   'deleteDesign',
-  'boxOf'];
+  'boxOf',
+  'buildOrthoPath',
+  'rectilinear',
+  'filletCorners',
+  'mergeCollinear',
+  'portNormal',
+  'PORT_STUB',
+  'deJog',
+  'MIN_LEG',
+  'lastOrtho'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
   + '\n;globalThis.__pickDesign = function (d) { pickedType = "factory"; pickedDesign = d; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
-  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
+  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, getHold: function(){return deliveryProgress().worst;}, getClock: function(){return clockT;}, getDeliveries: function(){return deliveries.length;}, isReported: function(){return reported;}, DELIVER_WINDOW: DELIVER_WINDOW, deliveryProgress: function(){return deliveryProgress();}, rateMet: function(){return rateMet();}, solvedMap: function(){return solved;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
@@ -1143,3 +1152,82 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 8400);
+
+/* --- belts should look like a factory, not a doodle --- */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- orthogonal belts ---');
+
+  api.loadLevel(3);
+  const lv = api.LEVELS[3];
+  const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const sm = api.addEntity('smelter', 11, 12, 1);
+  api.resolve();
+
+  /* a wandering diagonal drag between two machines */
+  const p0 = api.portsOf(m).out[0], p1 = api.portsOf(sm).in[0];
+  const raw = [];
+  for (let t = 0; t <= 1.0001; t += 0.05) {
+    raw.push({
+      x: p0.x + (p1.x - p0.x) * t + Math.sin(t * 7) * 0.5,
+      z: p0.z + (p1.z - p0.z) * t + Math.cos(t * 5) * 0.4,
+    });
+  }
+  const path = api.buildOrthoPath(raw, m, 0, sm, 0);
+  ok(path.length > 4, `a route was produced (${path.length} points)`);
+
+  /* what fraction of the length runs within 3 degrees of an axis? */
+  const axisFraction = (pts) => {
+    let axis = 0, total = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x, dz = pts[i].z - pts[i - 1].z;
+      const len = Math.hypot(dx, dz);
+      if (len < 1e-9) continue;
+      total += len;
+      const ang = Math.atan2(Math.abs(dz), Math.abs(dx));
+      if (ang < 0.052 || ang > Math.PI / 2 - 0.052) axis += len;
+    }
+    return total ? axis / total : 0;
+  };
+  const frac = axisFraction(path);
+  ok(frac > 0.75, `most of the run is axis-aligned (${(frac * 100).toFixed(0)}% of its length)`);
+
+  /* compare against the organic route on the same stroke */
+  const organic = api.buildPath(raw, m, 0, sm, 0, 40);
+  const oFrac = axisFraction(organic);
+  ok(frac > oFrac + 0.2,
+    `and far straighter than the organic route (${(frac * 100).toFixed(0)}% vs ${(oFrac * 100).toFixed(0)}%)`);
+
+  /* corners must still be driveable */
+  /* 5% tolerance: an arc is built from samples, and measuring its radius as the
+     circumradius of resampled points always reads a little under the true value. */
+  ok(api.minRadius(path) >= api.MIN_RADIUS * 0.95,
+    `corners respect the minimum turn radius (${api.minRadius(path).toFixed(2)} vs ${api.MIN_RADIUS})`);
+
+  /* endpoints must land exactly on the ports, or the belt detaches */
+  const s0 = path[0], s1 = path[path.length - 1];
+  ok(Math.hypot(s0.x - p0.x, s0.z - p0.z) < 1e-6, 'it starts exactly on the output port');
+  ok(Math.hypot(s1.x - p1.x, s1.z - p1.z) < 0.31, 'and ends on the input port');
+
+  /* the first move must be square out of the machine face */
+  const d0 = { x: path[1].x - path[0].x, z: path[1].z - path[0].z };
+  const n0 = api.portNormal(m, p0);
+  const along = (d0.x * n0.x + d0.z * n0.z) / Math.max(1e-9, Math.hypot(d0.x, d0.z));
+  ok(along > 0.95, `it leaves the port square to the face (alignment ${along.toFixed(2)})`);
+
+  /* the elbow helper must not invent diagonals */
+  const rect = api.rectilinear([{ x: 0, z: 0 }, { x: 4, z: 3 }], null);
+  const diag = rect.some((q, i) => i > 0
+    && Math.abs(q.x - rect[i - 1].x) > 1e-6 && Math.abs(q.z - rect[i - 1].z) > 1e-6);
+  ok(!diag, 'rectilinear() produces only axis-aligned segments');
+
+  /* an obstacle a right angle cannot clear must fall back, not fail */
+  const rock = lv.rocks[0];
+  const through = [];
+  for (let t = 0; t <= 1.0001; t += 0.05) through.push({ x: rock.x - 4 + 8 * t, z: rock.z });
+  ok(!!api.routeBlocked(through, null, null), 'a straight line through a rock is still refused');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 8900);

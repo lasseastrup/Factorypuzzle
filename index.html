@@ -822,7 +822,8 @@ const CLEARANCE = 0.34;        // how close a belt may pass a machine or rock
 const STROKE_MIN_STEP = 0.16;  // sampling distance while painting
 const SIMPLIFY_EPS = 0.24;     // how much finger wobble to discard
 const RESAMPLE = 0.3;
-const MIN_RADIUS = 1.25;       // conveyors cannot turn on a dime
+const MIN_RADIUS = 0.7;        // conveyors cannot turn on a dime, but a sweeping
+                               // curve eats the straight runs that read as a factory
 const SMOOTH_CAPS = [40, 20, 10, 4, 0];  // smoothing passes, strongest tried first
 const SNAP_RADIUS = 2.2;       // how near a port a stroke must start or end
 const BUMP_H = 0.46, BUMP_SIG = 0.62;  // over-under at a crossing
@@ -1063,6 +1064,10 @@ function minRadius(pts) {
     const ab = Math.hypot(b.x - a.x, b.z - a.z);
     const bc = Math.hypot(c.x - b.x, c.z - b.z);
     const ac = Math.hypot(c.x - a.x, c.z - a.z);
+    /* Resampling leaves a sliver at the tail. A triple containing one is not a real
+       corner, and including it made the metric report radii that no part of the belt
+       actually turns through. */
+    if (ab < 0.05 || bc < 0.05) continue;
     const area = Math.abs((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)) / 2;
     if (area < 1e-7) continue;
     m = Math.min(m, (ab * bc * ac) / (4 * area));
@@ -1531,6 +1536,117 @@ function routeBlocked(pts, srcEnt, dstEnt) {
 
 /* Turn a raw finger stroke into a conveyor: simplify, round the corners,
    then keep smoothing until it respects a minimum turn radius. */
+/* ---- rectilinear routing ----
+   A hand-drawn curve looks organic; a factory looks orthogonal. So the preferred
+   route is axis-aligned runs joined by filleted corners, following the shape the
+   player drew rather than replacing it. The old organic smoothing is kept as a
+   fallback for when a right-angled route will not fit past an obstacle. */
+
+/* which way a port faces, taken from where it sits relative to the machine centre */
+function portNormal(e, p) {
+  const dx = p.x - e.x, dz = p.z - e.z;
+  return Math.abs(dx) >= Math.abs(dz)
+    ? { x: Math.sign(dx) || 1, z: 0 }
+    : { x: 0, z: Math.sign(dz) || 1 };
+}
+
+function mergeCollinear(pts) {
+  if (pts.length < 3) return pts.slice();
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = out[out.length - 1], b = pts[i], c = pts[i + 1];
+    const cross = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+    if (Math.abs(cross) > 1e-6) out.push(b);
+  }
+  out.push(pts[pts.length - 1]);
+  return out.filter((p, i, arr) => i === 0 || dist2(p, arr[i - 1]) > 1e-9);
+}
+
+/* Straighten out small jogs before routing. A waypoint that sits only a little off
+   the previous one's axis would otherwise produce a stub leg too short to fillet, so
+   the corner ends up sharp and the run looks fussy. Snapping it into line gives one
+   long straight instead — which is also what a tidy factory looks like. */
+function deJog(waypoints, minLeg, lockHead, lockTail) {
+  if (waypoints.length < 3) return waypoints.slice();
+  const out = waypoints.map((p) => ({ x: p.x, z: p.z }));
+  const first = Math.max(1, lockHead || 1);
+  const last = out.length - 1 - Math.max(1, lockTail || 1);
+  /* Only the free middle may move. The port and its approach point are structural:
+     nudging the approach off the port's axis is what put a 0.11 m jog immediately
+     before the port and left that corner unfilletable. */
+  const align = (b, a) => {
+    const dx = Math.abs(b.x - a.x), dz = Math.abs(b.z - a.z);
+    if (dx < minLeg && dx <= dz) b.x = a.x;
+    else if (dz < minLeg && dz < dx) b.z = a.z;
+  };
+  for (let i = first; i <= last; i++) align(out[i], out[i - 1]);
+  /* and again from the far end, so a middle point close to the exit approach is
+     pulled into line with it rather than dragging it out of line */
+  for (let i = last; i >= first; i--) align(out[i], out[i + 1]);
+  return mergeCollinear(out);
+}
+
+/* Replace each leg with an L, choosing the elbow that stays closer to what the
+   player actually drew. */
+function rectilinear(waypoints, raw) {
+  if (waypoints.length < 2) return waypoints.slice();
+  const out = [waypoints[0]];
+  for (let i = 1; i < waypoints.length; i++) {
+    const a = out[out.length - 1], b = waypoints[i];
+    if (Math.abs(b.x - a.x) < 1e-4 || Math.abs(b.z - a.z) < 1e-4) { out.push(b); continue; }
+    const e1 = { x: b.x, z: a.z }, e2 = { x: a.x, z: b.z };
+    const d1 = raw && raw.length > 1 ? distToPath(e1, raw) : 0;
+    const d2 = raw && raw.length > 1 ? distToPath(e2, raw) : 1;
+    out.push(d1 <= d2 ? e1 : e2);
+    out.push(b);
+  }
+  return mergeCollinear(out);
+}
+
+/* Round every corner with a real arc, so the radius is guaranteed rather than
+   approached by repeated averaging. */
+function filletCorners(pts, r) {
+  if (pts.length < 3) return pts.slice();
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = pts[i - 1], b = pts[i], c = pts[i + 1];
+    const l1 = Math.hypot(a.x - b.x, a.z - b.z), l2 = Math.hypot(c.x - b.x, c.z - b.z);
+    if (l1 < 1e-6 || l2 < 1e-6) continue;
+    const v1 = { x: (a.x - b.x) / l1, z: (a.z - b.z) / l1 };
+    const v2 = { x: (c.x - b.x) / l2, z: (c.z - b.z) / l2 };
+    let cosA = v1.x * v2.x + v1.z * v2.z;
+    cosA = Math.max(-1, Math.min(1, cosA));
+    const ang = Math.acos(cosA);
+    if (ang > Math.PI - 0.02) continue;                 /* straight through */
+    const tanHalf = Math.tan(ang / 2);
+    if (!isFinite(tanHalf) || tanHalf < 1e-6) { out.push(b); continue; }
+    const d = Math.min(r / tanHalf, l1 * 0.49, l2 * 0.49);
+    const rad = d * tanHalf;
+    const p1 = { x: b.x + v1.x * d, z: b.z + v1.z * d };
+    const p2 = { x: b.x + v2.x * d, z: b.z + v2.z * d };
+    let bx = v1.x + v2.x, bz = v1.z + v2.z;
+    const bl = Math.hypot(bx, bz);
+    if (bl < 1e-6) { out.push(b); continue; }
+    bx /= bl; bz /= bl;
+    const cen = { x: b.x + bx * (rad / Math.sin(ang / 2)), z: b.z + bz * (rad / Math.sin(ang / 2)) };
+    const a1 = Math.atan2(p1.z - cen.z, p1.x - cen.x);
+    let a2 = Math.atan2(p2.z - cen.z, p2.x - cen.x);
+    let sweep = a2 - a1;
+    while (sweep > Math.PI) sweep -= 2 * Math.PI;
+    while (sweep < -Math.PI) sweep += 2 * Math.PI;
+    /* Sample finer than RESAMPLE. A coarse arc is a polygon, and resampling along
+       its chords lands points inside the circle, so the measured radius came out
+       well below the radius actually built. */
+    const steps = Math.max(4, Math.ceil((Math.abs(sweep) * rad) / (RESAMPLE * 0.5)));
+    for (let k = 0; k <= steps; k++) {
+      const t = a1 + sweep * (k / steps);
+      out.push({ x: cen.x + Math.cos(t) * rad, z: cen.z + Math.sin(t) * rad });
+    }
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
 /* Keep smoothing until the path actually respects the minimum turn radius, rather
    than applying a fixed amount and hoping. A fixed number of passes leaves shaky
    input well short of the target, which made MIN_RADIUS decorative. Smoothing is
@@ -1545,6 +1661,10 @@ function smoothToRadius(pts, maxIter) {
   return out;
 }
 
+const PORT_STUB = 1.2;    /* belts leave and enter square to the machine face */
+const MIN_LEG = 1.8;      /* shorter legs than this get straightened out */
+let lastOrtho = null;     /* the most recent orthogonal route, for tests */
+
 function buildPath(raw, a, aPort, b, bPort, maxIter) {
   const P = { a: portsOf(a).out[aPort], b: portsOf(b).in[bPort] };
   let pts = [P.a]
@@ -1554,15 +1674,40 @@ function buildPath(raw, a, aPort, b, bPort, maxIter) {
   return smoothToRadius(chaikin(pts, 3), maxIter);
 }
 
+/* the axis-aligned route: a stub square out of each port, an L through every
+   waypoint the player's stroke implies, then real arcs at the corners */
+function buildOrthoPath(raw, a, aPort, b, bPort) {
+  const pa = portsOf(a).out[aPort], pb = portsOf(b).in[bPort];
+  const na = portNormal(a, pa), nb = portNormal(b, pb);
+  /* The approach runs are deliberately long. With a port pinned in place, an elbow
+     landing near it leaves a leg too short to fillet, so the corner comes out sharp
+     right where it is most visible. Turning further out fixes it by construction. */
+  const span = Math.hypot(pb.x - pa.x, pb.z - pa.z);
+  const reach = Math.max(PORT_STUB, Math.min(PORT_STUB + MIN_LEG, span * 0.35));
+  const apA = { x: pa.x + na.x * reach, z: pa.z + na.z * reach };
+  const apB = { x: pb.x + nb.x * reach, z: pb.z + nb.z * reach };
+  const mid = simplify(
+    raw.filter((p) => dist2(p, apA) > reach * reach && dist2(p, apB) > reach * reach),
+    Math.max(SIMPLIFY_EPS, 0.5));
+  const waypoints = deJog(mergeCollinear([pa, apA].concat(mid).concat([apB, pb])), MIN_LEG, 2, 2);
+  const ortho = rectilinear(waypoints, raw);
+  lastOrtho = { waypoints, ortho, reach };   /* kept for diagnostics */
+  return resample(filletCorners(ortho, MIN_RADIUS), RESAMPLE);
+}
+
 /* Smoothest first, easing off only as far as needed. Heavy smoothing pulls the
    path away from where the finger actually went, which can push it into an
    obstacle — so clearance is the hard constraint and smoothness gives way to it. */
 function finishStroke(raw, a, aPort, b, bPort) {
+  /* orthogonal first: it is what makes a plot read as a factory */
+  const ortho = buildOrthoPath(raw, a, aPort, b, bPort);
+  if (!routeBlocked(ortho, a, b)) return ortho;
+  /* if a right-angled route will not fit, fall back to the organic one */
   for (const cap of SMOOTH_CAPS) {
     const out = buildPath(raw, a, aPort, b, bPort, cap);
     if (!routeBlocked(out, a, b)) return out;
   }
-  return buildPath(raw, a, aPort, b, bPort, 0);   /* commitStroke reports why */
+  return ortho;   /* commitStroke reports why it will not fit */
 }
 
 function commitStroke(raw, endPoint, pickedEnd) {
@@ -2769,8 +2914,20 @@ function drawStrokePreview() {
   clear(gGhost);
   const a = stroke.fromEnt;
   const start = portsOf(a).out[stroke.fromPort];
-  const pts = smoothToRadius(chaikin(simplify([start].concat(stroke.pts), SIMPLIFY_EPS), 3), 40);
-  if (pts.length < 2) return;
+  /* preview the orthogonal route, so what is shown is what lands */
+  const target = entAt(stroke.pts[stroke.pts.length - 1] || start);
+  let pts;
+  if (target && target !== a) {
+    const ip = freeInPort(target, outItemOf(a));
+    pts = ip >= 0 ? buildOrthoPath(stroke.pts, a, stroke.fromPort, target, ip) : null;
+  }
+  if (!pts) {
+    const na = portNormal(a, start);
+    const stubA = { x: start.x + na.x * PORT_STUB, z: start.z + na.z * PORT_STUB };
+    const mid = simplify(stroke.pts.filter((p) => dist2(p, stubA) > 0.6 * 0.6), Math.max(SIMPLIFY_EPS, 0.5));
+    pts = resample(filletCorners(rectilinear(mergeCollinear([start, stubA].concat(mid)), stroke.pts), MIN_RADIUS), RESAMPLE);
+  }
+  if (!pts || pts.length < 2) return;
   const bad = routeBlocked(pts, a, entAt(pts[pts.length - 1]));
   const fake = { path: pts, arc: arcTable(pts), tier: beltTier, bumps: [] };
   const g = ribbon([fake], (l, c) => c.setHex(bad ? 0xc2402f : 0x2f9e6f));
