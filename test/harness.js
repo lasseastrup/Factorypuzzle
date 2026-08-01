@@ -55,7 +55,7 @@ function El(tag) {
 }
 
 const ids = {};
-for (const id of ['labels', 'docket', 'lvId', 'lvName', 'lvHint', 'quotas', 'levelBar',
+for (const id of ['menu','rotBtn','labels', 'docket', 'lvId', 'lvName', 'lvHint', 'quotas', 'levelBar',
                   'insp', 'trayScroll', 'bar2', 'run', 'plannerBtn', 'clearBtn',
                   'report', 'rcard', 'toast', 'tools', 'tray', 'rotBtn', 'camBtn']) {
   ids[id] = El('div');
@@ -140,13 +140,17 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'PORT_STUB',
   'deJog',
   'MIN_LEG',
-  'lastOrtho'];
+  'lastOrtho',
+  'buildLevelBar',
+  'refreshRotate',
+  'clearPlot',
+  'toggleMenu'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
   + '\n;globalThis.__pickDesign = function (d) { pickedType = "factory"; pickedDesign = d; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
-  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
+  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, getSelected: function(){return selected;}, selectNothing: function(){selected=null;showInspector(null);refreshRotate();}, rotVisible: function(){return document.getElementById("rotBtn").classList.contains("show");}, trayLabels: function(){return Array.from(document.querySelector("#trayScroll").children).map(function(c){return c.innerHTML;});}, menuHtml: function(){return document.getElementById("menu").innerHTML||"";}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, getHold: function(){return deliveryProgress().worst;}, getClock: function(){return clockT;}, getDeliveries: function(){return deliveries.length;}, isReported: function(){return reported;}, DELIVER_WINDOW: DELIVER_WINDOW, deliveryProgress: function(){return deliveryProgress();}, rateMet: function(){return rateMet();}, solvedMap: function(){return solved;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
@@ -1231,3 +1235,78 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 8900);
+
+/* --- the simplified control surface ---
+   Painting a belt used to need a mode button. It is now a drag from a machine, and a
+   tap on the same machine selects it instead, so three of the five tools could go. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- gestural controls ---');
+
+  const THREE2 = require('three');
+  api.loadLevel(1);
+  const lv = api.LEVELS[1];
+  const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const sm = api.addEntity('smelter', 8, 3.5, 1);
+  api.resolve();
+  api.setTool('select');
+
+  const cv = api.renderer.domElement;
+  const toScreen = (wx, wz) => {
+    const v = new THREE2.Vector3(wx, 0, wz).project(api.camera);
+    return { x: (v.x * 0.5 + 0.5) * 390, y: (-v.y * 0.5 + 0.5) * 844 };
+  };
+  const at = (e) => toScreen(e.x, e.z);
+
+  /* a tap on a machine selects it, with no mode chosen first */
+  const a = at(m);
+  cv.fire('pointerdown', { pointerId: 1, clientX: a.x, clientY: a.y });
+  cv.fire('pointerup', { pointerId: 1, clientX: a.x, clientY: a.y });
+  ok(api.getSelected() === m, 'tapping a machine selects it');
+  ok(api.links().length === 0, 'and lays no belt');
+
+  /* a drag from that machine to another lays a belt, still with no mode chosen */
+  const b = at(sm);
+  cv.fire('pointerdown', { pointerId: 1, clientX: a.x, clientY: a.y });
+  for (let t = 0.2; t <= 1.0001; t += 0.2) {
+    cv.fire('pointermove', { pointerId: 1, clientX: a.x + (b.x - a.x) * t, clientY: a.y + (b.y - a.y) * t });
+  }
+  cv.fire('pointerup', { pointerId: 1, clientX: b.x, clientY: b.y });
+  ok(api.links().length === 1, 'dragging from one machine to another lays a belt');
+
+  /* dragging from empty ground still pans rather than painting */
+  const before = api.getCam();
+  const empty = toScreen(2, 12);
+  cv.fire('pointerdown', { pointerId: 1, clientX: empty.x, clientY: empty.y });
+  cv.fire('pointermove', { pointerId: 1, clientX: empty.x + 60, clientY: empty.y });
+  const after = api.getCam();
+  cv.fire('pointerup', { pointerId: 1, clientX: empty.x + 60, clientY: empty.y });
+  ok(Math.hypot(after.x - before.x, after.z - before.z) > 0.2, 'dragging empty ground still pans');
+  ok(api.links().length === 1, 'and lays no belt');
+
+  /* the rotate control only exists when there is something to rotate */
+  api.setTool('select');
+  api.selectNothing();
+  ok(!api.rotVisible(), 'the Turn control is hidden with nothing selected');
+  globalThis.__pick('smelter', 'ingot');
+  api.setTool('place');
+  ok(api.rotVisible(), 'and appears while placing');
+
+  /* belt tiers are no longer tray cards */
+  api.setTool('select');
+  const cards = api.trayLabels();
+  ok(!cards.some((t) => /Belt Mk/.test(t)), `no belt tier cards in the tray (${cards.length} cards)`);
+  ok(cards.some((t) => /Build factory/.test(t)), 'the tray still offers Build factory');
+
+  /* the level menu carries what three buttons used to */
+  api.buildLevelBar();
+  const menu = api.menuHtml();
+  const entries = (menu.match(/data-lv=/g) || []).length;
+  ok(entries === api.LEVELS.length, `the menu lists every level (${entries} entries)`);
+  ok(/Clear/.test(menu), 'and holds Clear, off the main surface');
+  ok(/data-act="clear"/.test(menu), 'wired to the clear action');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 9400);

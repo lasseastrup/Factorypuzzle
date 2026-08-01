@@ -16,43 +16,45 @@
   html,body{margin:0;height:100%;overflow:hidden;background:#a8ada1;font-family:var(--ui);color:var(--ink)}
   canvas{display:block;touch-action:none}
 
-  #docket{position:fixed;top:0;left:0;right:0;padding:8px 10px;
-    background:linear-gradient(#161d21,#1d262b);color:#e8e6dd;
-    display:flex;gap:10px;align-items:stretch;z-index:10}
-  #docket .id{font-family:var(--mono);font-size:10px;color:#7f8b84;writing-mode:vertical-rl;
-    transform:rotate(180deg);letter-spacing:.2em;padding:2px 6px 2px 0;border-right:1px solid #333e44}
-  #dockBody{flex:1;min-width:0}
-  #lvName{font:600 13px/1.2 var(--ui)}
-  #lvHint{font-size:10.5px;color:#95a09a;margin-top:2px;line-height:1.3}
+  #docket{position:fixed;top:0;left:0;right:0;padding:10px 12px 9px;
+    background:#141b1f;color:#e8e6dd;z-index:10;
+    box-shadow:0 1px 0 rgba(255,255,255,.05), 0 6px 18px rgba(0,0,0,.22)}
+  #dockBody{min-width:0}
+  #lvName{display:inline-flex;align-items:center;gap:5px;border:0;background:none;padding:0;
+    font:600 14px/1.2 var(--ui);color:#f2f0e8;cursor:pointer;letter-spacing:-.01em}
+  #lvName::after{content:'';width:0;height:0;border:4px solid transparent;
+    border-top-color:#7f8b84;margin-top:3px}
+  #lvHint{font-size:11px;color:#98a39c;margin-top:3px;line-height:1.35;max-width:34em}
   #quotas{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
-  .q{display:flex;align-items:center;gap:5px;background:#232d33;border:1px solid #334047;
-     border-radius:2px;padding:3px 6px;font-family:var(--mono);font-size:11px}
+  .q{display:flex;align-items:center;gap:6px;background:#1e272c;border:1px solid #2e3a41;
+     border-radius:12px;padding:4px 9px;font-family:var(--mono);font-size:11px}
   .q .sw{width:8px;height:8px;border-radius:1px}
   .q .got{color:#7f8b84}
   .q.met{border-color:#2f9e6f;background:#1b2f28}
   .q.met .got{color:#5fd0a8}
 
-  #hold{margin-top:6px;height:14px;position:relative;background:#232d33;border:1px solid #334047;
-    border-radius:2px;overflow:hidden}
+  #hold{margin-top:8px;height:18px;width:100%;position:relative;background:#1e272c;
+    border:1px solid #2e3a41;border-radius:9px;overflow:hidden;cursor:pointer;padding:0;display:block}
   #holdBar{position:absolute;inset:0 auto 0 0;width:0;background:#2f6f4e;transition:width .1s linear}
   #hold span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     font-family:var(--mono);font-size:9px;letter-spacing:.04em;color:#cfe3d8}
   #hold.done #holdBar{background:#2f9e6f}
   #hold.wait #holdBar{background:#4a5a63}
 
-  #tools{position:fixed;right:8px;top:50%;transform:translateY(-50%);z-index:10;
-    display:flex;flex-direction:column;gap:5px}
-  .tbtn{width:44px;height:44px;border:1px solid var(--line);background:var(--panel);
-    border-radius:3px;display:grid;place-items:center;font:600 8.5px/1.15 var(--ui);
-    letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);cursor:pointer;padding:3px;text-align:center}
-  .tbtn.on{background:var(--ink);color:#f0eee5;border-color:var(--ink)}
+  /* the only floating control, and it stays hidden until it applies */
+  .tbtn{position:fixed;right:10px;bottom:124px;z-index:12;display:none;
+    width:52px;height:52px;border:1px solid rgba(0,0,0,.14);background:rgba(252,251,247,.96);
+    border-radius:26px;place-items:center;font:600 10px/1.15 var(--ui);
+    letter-spacing:.03em;color:var(--ink);cursor:pointer;
+    box-shadow:0 2px 8px rgba(20,26,30,.18)}
+  .tbtn.show{display:grid}
 
   #tray{position:fixed;bottom:0;left:0;right:0;z-index:10;background:var(--panel);
-    border-top:1px solid var(--line)}
+    border-top:1px solid var(--line);box-shadow:0 -6px 18px rgba(20,26,30,.12)}
   #trayScroll{display:flex;gap:6px;overflow-x:auto;padding:7px 8px;scrollbar-width:none}
   #trayScroll::-webkit-scrollbar{display:none}
-  .card{flex:0 0 auto;width:82px;border:1px solid var(--line);border-radius:3px;
-    background:#f6f4ed;padding:5px 6px;cursor:pointer;text-align:left}
+  .card{flex:0 0 auto;width:86px;border:1px solid var(--line);border-radius:7px;
+    background:#f6f4ed;padding:6px 7px;cursor:pointer;text-align:left}
   .card.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
   .card{position:relative}
   .cardDel{position:absolute;top:-1px;right:1px;width:18px;height:18px;line-height:17px;
@@ -61,14 +63,14 @@
   .card .cn{font:600 10.5px/1.2 var(--ui)}
   .card .cr{font-family:var(--mono);font-size:9px;color:#6d7570;margin-top:3px;line-height:1.35}
   .card .bar{height:3px;border-radius:2px;margin-bottom:4px}
-  #bar2{display:flex;gap:6px;padding:0 8px 7px;align-items:center}
-  .mini.wide{flex:1}
-  .mini{height:38px;padding:0 10px;border:1px solid var(--line);background:#f6f4ed;
-    border-radius:3px;font:600 10px/1 var(--ui);letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
+  #bar2{display:flex;gap:6px;padding:0 10px 9px;align-items:center}
+  .mini{height:34px;padding:0 14px;border:1px solid var(--line);background:#f4f2ea;
+    border-radius:17px;font:600 10.5px/1 var(--ui);letter-spacing:.03em;color:var(--ink-2);cursor:pointer}
   .mini.on{background:var(--ink);color:#f0eee5;border-color:var(--ink)}
 
-  #insp{position:fixed;left:8px;bottom:104px;z-index:11;width:214px;background:var(--panel);
-    border:1px solid var(--line);border-radius:3px;padding:8px 9px;display:none}
+  #insp{position:fixed;left:10px;bottom:116px;z-index:11;width:218px;background:var(--panel);
+    border:1px solid var(--line);border-radius:7px;padding:10px 11px;display:none;
+    box-shadow:0 8px 22px rgba(20,26,30,.18)}
   #insp h4{margin:0 0 5px;font:600 11.5px/1.2 var(--ui)}
   #insp .row{display:flex;justify-content:space-between;font-family:var(--mono);
     font-size:10px;padding:2px 0;border-bottom:1px dotted #c9c5b6}
@@ -116,6 +118,18 @@
   .lv.done{border-color:var(--run);color:var(--run)}
   .lv.done.on{color:#5fd0a8}
 
+  #menu{position:fixed;left:12px;z-index:14;display:none;background:var(--panel);
+    border:1px solid var(--line);border-radius:7px;padding:5px;min-width:196px;
+    box-shadow:0 10px 26px rgba(20,26,30,.24)}
+  #menu.show{display:block}
+  #menu button{display:flex;width:100%;justify-content:space-between;align-items:center;
+    border:0;background:none;text-align:left;padding:8px 9px;border-radius:4px;
+    font:500 12px/1.2 var(--ui);color:var(--ink);cursor:pointer}
+  #menu button.on{font-weight:700}
+  #menu button em{font-family:var(--mono);font-size:9.5px;font-style:normal;color:#7d8279}
+  #menu hr{border:0;border-top:1px solid var(--panel-2);margin:5px 2px}
+  #menu button.danger{color:var(--block)}
+
   #crumbs{position:fixed;left:8px;z-index:10;display:none;align-items:center;gap:5px;
     background:rgba(236,234,225,.94);border:1px solid var(--line);border-radius:3px;padding:3px 6px}
   #crumbs button{border:0;background:none;font:600 10px/1 var(--ui);letter-spacing:.04em;
@@ -140,31 +154,22 @@
 <body>
 <div id="labels"></div>
 <div id="docket">
-  <div class="id" id="lvId">LV 01</div>
   <div id="dockBody">
-    <div id="lvName">—</div>
+    <button id="lvName">—</button>
     <div id="lvHint">—</div>
     <div id="quotas"></div>
-    <div id="hold"><div id="holdBar"></div><span id="holdText"></span></div>
+    <button id="hold"><div id="holdBar"></div><span id="holdText"></span></button>
   </div>
 </div>
-<div id="levelBar"></div>
 <div id="crumbs"></div>
-<div id="tools">
-  <button class="tbtn on" data-tool="select">Select</button>
-  <button class="tbtn" data-tool="belt">Paint belt</button>
-  <button class="tbtn" data-tool="erase">Erase</button>
-  <button class="tbtn" id="rotBtn">Turn 90&deg;</button>
-  <button class="tbtn" id="camBtn">Rotate view</button>
-</div>
-<div id="ruler"></div>
+<div id="menu"></div>
+<!-- Rotate is the only floating control, and it only exists while it applies. -->
+<button class="tbtn" id="rotBtn">Turn</button>
 <div id="insp"></div>
 <div id="tray">
   <div id="trayScroll"></div>
   <div id="bar2">
-    <button class="mini wide" id="plannerBtn">Planner</button>
-    <button class="mini wide" id="scoreBtn">Score</button>
-    <button class="mini wide" id="clearBtn">Clear</button>
+    <button class="mini" id="plannerBtn">Show rates</button>
   </div>
 </div>
 <div id="report"><div id="rcard"></div></div>
@@ -744,7 +749,7 @@ function score(state, result) {
    ============================================================ */
 const LEVELS = [
   { id: 'Ingots', name: 'First ingots', rung: 1,
-    hint: 'Paint a belt: press on a machine and drag to the next one. Curves are fine.',
+    hint: 'Drop a Miner on the ore patch, then drag from it to a Smelter to lay a belt.',
     w: 15, h: 14,
     nodes: [{ x: 3.5, z: 4, rate: 30 }],
     depot: { x: 11.5, z: 10 },
@@ -754,7 +759,7 @@ const LEVELS = [
     par: { machines: 2, belt: 10, ore: 30 } },
 
   { id: 'Plates', name: 'Plate line', rung: 2,
-    hint: 'A Constructor turns 30 ingots into 20 plates. Watch the efficiency ring.',
+    hint: 'A Constructor turns 30 ingots into 20 plates. Tap any machine to inspect it.',
     w: 17, h: 14,
     nodes: [{ x: 3, z: 3.5, rate: 30 }],
     depot: { x: 13.5, z: 10.5 },
@@ -764,7 +769,7 @@ const LEVELS = [
     par: { machines: 3, belt: 14, ore: 30 } },
 
   { id: 'Screws', name: 'Ninety screws', rung: 2,
-    hint: 'A Constructor makes 90 screws a minute. A Mk1 belt carries 60. Find the bottleneck.',
+    hint: 'A Constructor makes 90 screws a minute. A belt carries 60. Tap the full belt to upgrade it.',
     w: 17, h: 16,
     nodes: [{ x: 3, z: 4.5, rate: 30 }],
     depot: { x: 13.5, z: 11.5 },
@@ -774,7 +779,7 @@ const LEVELS = [
     par: { machines: 4, belt: 17, ore: 30 } },
 
   { id: 'Reinf', name: 'Reinforced plate', rung: 2,
-    hint: 'Plates and screws into one Assembler. Two nodes, and Mk2 belts are unlocked.',
+    hint: 'An Assembler needs plates AND screws. Each machine has one output, so plan two lines.',
     w: 21, h: 18,
     nodes: [{ x: 3, z: 3.5, rate: 30 }, { x: 3, z: 13.5, rate: 30 }],
     depot: { x: 17.5, z: 9 },
@@ -785,7 +790,7 @@ const LEVELS = [
     par: { machines: 8, belt: 46, ore: 60 } },
 
   { id: 'Twin', name: 'Two products, one node', rung: 4,
-    hint: 'A pure node gives 60 ore. Both outputs draw on it — the split is the puzzle.',
+    hint: 'One node, two products. A machine has one output, so place a Splitter to divide it.',
     w: 19, h: 16,
     nodes: [{ x: 3, z: 8, rate: 60 }],
     depot: { x: 15.5, z: 8 },
@@ -2419,23 +2424,27 @@ function buildTray() {
   nb.onclick = () => editDesign(newDesign());
   el.appendChild(nb);
 
-  for (const t of L.belts) {
-    const tier = BELTS.find((b) => b.id === t);
-    const card = document.createElement('button');
-    card.className = 'card' + (tool === 'belt' && beltTier === t ? ' on' : '');
-    card.innerHTML = '<div class="bar" style="background:#' + tier.color.toString(16).padStart(6, '0') + '"></div>'
-      + '<div class="cn">Belt ' + tier.name + '</div><div class="cr">' + tier.cap + '/min cap</div>';
-    card.onclick = () => { beltTier = t; setTool('belt'); buildTray(); };
-    el.appendChild(card);
-  }
+  /* Belt tiers are not cards. A tier is a property of a belt rather than a thing you
+     place, so new belts start at Mk1 and are upgraded by tapping the belt — which is
+     also precisely the lesson level 3 exists to teach. */
 }
 
+/* Only two modes remain, and one of them is entered by picking something to place. */
 function setTool(t) {
   tool = t;
   stroke = null;
-  document.querySelectorAll('.tbtn[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === t));
   if (t !== 'place') { pickedType = null; pickedRecipe = null; pickedDesign = null; }
   clear(gGhost);
+  refreshRotate();
+}
+
+/* Rotate is the one control that has to float, and it appears only when there is
+   something to rotate. */
+function refreshRotate() {
+  const b = $('#rotBtn');
+  const rotatable = (tool === 'place' && pickedType && MACHINES[pickedType].kind !== 'pass')
+    || (selected && MACHINES[selected.type].kind !== 'sink' && MACHINES[selected.type].kind !== 'pass');
+  b.classList.toggle('show', !!rotatable);
 }
 
 /* The player needs to know why nothing is being credited yet: still filling, or
@@ -2475,21 +2484,43 @@ function refreshQuotas() {
   }
 }
 
+/* One menu behind the level title, instead of a permanent row of level buttons plus
+   a Score button plus a Clear button. Score is reachable by tapping the progress bar,
+   which is where a player already looks to see how they are doing. */
+let menuOpen = false;
 function buildLevelBar() {
-  const el = $('#levelBar');
-  el.innerHTML = '';
+  const el = $('#menu');
+  let html = '';
   LEVELS.forEach((lv, i) => {
-    const b = document.createElement('button');
-    b.className = 'lv' + (i === lvIndex ? ' on' : '') + (solved[lv.id] ? ' done' : '');
-    b.textContent = i + 1;
-    b.onclick = () => loadLevel(i);
-    el.appendChild(b);
+    html += '<button data-lv="' + i + '" class="' + (i === lvIndex ? 'on' : '') + '">'
+      + (i + 1) + '. ' + lv.name
+      + '<em>' + (solved[lv.id] ? 'done' : Object.entries(lv.quota).map(([k, v]) => v + ' ' + ITEMS[k].short).join(' + ')) + '</em></button>';
   });
+  html += '<hr><button data-act="clear" class="danger">Clear this plot</button>';
+  el.innerHTML = html;
+  el.querySelectorAll('button').forEach((b) => b.onclick = () => {
+    closeMenu();
+    if (b.dataset.act === 'clear') return clearPlot();
+    loadLevel(+b.dataset.lv);
+  });
+}
+function closeMenu() { menuOpen = false; $('#menu').classList.remove('show'); }
+function toggleMenu() {
+  menuOpen = !menuOpen;
+  $('#menu').classList.toggle('show', menuOpen);
+}
+function clearPlot() {
+  dropWhere(ents, (e) => MACHINES[e.type].kind !== 'sink' && e.type !== 'termIn' && e.type !== 'termOut');
+  links.length = 0;
+  selected = null; showInspector(null);
+  $('#report').style.display = 'none';
+  computeCrossings();
+  resolve();
 }
 
 function showInspector(e) {
   const box = $('#insp');
-  if (!e) { box.style.display = 'none'; return; }
+  if (!e) { box.style.display = 'none'; refreshRotate(); return; }
   const def = MACHINES[e.type], r = recipeOf(e);
   let html = '<h4>' + ((def.kind === 'factory' && e.def && e.def.name) || def.name)
     + (r && def.recipes.length > 1 ? ' · ' + r.label : '') + '</h4>';
@@ -2712,7 +2743,7 @@ const pointers = new Map();
    and Vector3 * number is NaN. That poisoned the zoom permanently and left the
    camera frustum non-finite, so nothing rendered but the sky. */
 let dragMode = null, dragStart = null, pinchStart = 0, moved = 0, pinched = false;
-let panStart = new THREE.Vector3(), zoomStart = 0;
+let panStart = new THREE.Vector3(), zoomStart = 0, pinchAngle = 0, yawStart = 0;
 
 /* Every gesture is measured against a baseline: pinch against a starting finger
    distance, pan against a starting touch point. When the number of fingers
@@ -2735,6 +2766,8 @@ function rebaseGesture() {
   } else {
     dragMode = null;
     pinched = false;
+    /* leaving a pinch: settle the view on a right angle */
+    yawTarget = Math.round(yaw / (Math.PI / 2)) * (Math.PI / 2);
   }
 }
 
@@ -2786,6 +2819,11 @@ cv.addEventListener('pointerdown', (ev) => {
   moved = 0;
   if (pointers.size >= 2) {
     rebaseGesture();
+    {
+      const pp = [...pointers.values()];
+      pinchAngle = Math.atan2(pp[1].y - pp[0].y, pp[1].x - pp[0].x);
+      yawStart = yaw;
+    }
     stroke = null; clear(gGhost);
     return;
   }
@@ -2803,26 +2841,18 @@ cv.addEventListener('pointerdown', (ev) => {
     return;
   }
 
-  if (tool === 'belt' && g) {
-    /* begin a stroke at the nearest free output port */
-    let bestE = null, bestP = -1, bd = SNAP_RADIUS * SNAP_RADIUS;
-    const picked = machineAtScreen(ev.clientX, ev.clientY);
-    if (picked && freeOutPort(picked) >= 0) { bestE = picked; bestP = freeOutPort(picked); bd = -1; }
-    for (const e of ents) {
-      const free = freeOutPort(e);
-      if (free < 0) continue;
-      const p = portsOf(e).out[free];
-      const d = dist2(p, g);
-      const onBody = inBox(g, boxOf(e, 0.2));
-      if (onBody || d < bd) { bd = onBody ? -1 : d; bestE = e; bestP = free; }
-    }
-    if (bestE) {
-      stroke = { fromEnt: bestE, fromPort: bestP, pts: [] };
+  /* Painting a belt is a drag that starts on a machine; selecting is a tap on one.
+     Those are already different gestures, so the Select / Paint belt / Erase modes
+     were pure overhead — three buttons to express something the hand already says.
+     The stroke starts speculatively and is discarded on lift if the finger never
+     moved, which is what makes the same press serve both purposes. */
+  if (g) {
+    const picked = machineAtScreen(ev.clientX, ev.clientY) || entAt(g);
+    if (picked && freeOutPort(picked) >= 0) {
+      stroke = { fromEnt: picked, fromPort: freeOutPort(picked), pts: [] };
       dragMode = 'paint';
       return;
     }
-    const blocked = ents.find((e) => inBox(g, boxOf(e, 0.2)));
-    if (blocked) toast(portError(blocked, blocked, null) || (MACHINES[blocked.type].name + ' has no free output port.'));
   }
   dragMode = 'maybe';
 });
@@ -2838,6 +2868,11 @@ cv.addEventListener('pointermove', (ev) => {
     const p = [...pointers.values()];
     const d = Math.max(1, Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y));
     setZoom(zoomStart * (pinchStart / d));
+    /* Twisting turns the view, which retires the Rotate view button. It snaps to a
+       right angle on release, so an accidental twist during a pinch costs nothing. */
+    const ang = Math.atan2(p[1].y - p[0].y, p[1].x - p[0].x);
+    yaw = yawStart - (ang - pinchAngle);
+    yawTarget = yaw;
     return;
   }
   const dx = ev.clientX - dragStart.x, dy = ev.clientY - dragStart.y;
@@ -2882,8 +2917,16 @@ cv.addEventListener('pointerup', (ev) => {
   pointers.delete(ev.pointerId);
   if (painting) {
     clear(gGhost);
+    if (moved < 9) {
+      /* never moved: treat it as a tap on the machine instead of a failed belt */
+      const src = stroke.fromEnt;
+      stroke = null;
+      selected = src; buildMachines(); showInspector(src);
+      rebaseGesture();
+      return;
+    }
     if (stroke.pts.length >= 1 && g) commitStroke(stroke.pts, g, machineAtScreen(ev.clientX, ev.clientY));
-    else toast('Drag from one machine to another to lay a belt.');
+    else toast('Drag from a machine to another machine to lay a belt.');
     stroke = null;
     if (!pointers.size) { dragMode = null; pinched = false; }
     return;
@@ -2983,18 +3026,12 @@ function placeAt(g) {
 
 function handleTap(g, cx, cy) {
   if (tool === 'place' && pickedType) { placeAt(g); return; }
-  if (tool === 'erase') {
-    const e = machineAtScreen(cx, cy) || entAt(g);
-    if (e && MACHINES[e.type].kind !== 'sink') { removeEntity(e); computeCrossings(); resolve(); return; }
-    const l = beltAt(g);
-    if (l) { dropWhere(links, (x) => x === l); computeCrossings(); resolve(); return; }
-    return;
-  }
+
   const e = machineAtScreen(cx, cy) || entAt(g);
-  if (e) { selected = e; buildMachines(); showInspector(e); return; }
+  if (e) { selected = e; buildMachines(); showInspector(e); refreshRotate(); return; }
   const l = beltAt(g);
   if (l) { selected = null; buildMachines(); showBeltInspector(l); return; }
-  selected = null; buildMachines(); showInspector(null);
+  selected = null; buildMachines(); showInspector(null); refreshRotate();
 }
 
 function ghostAt(cx, cy) {
@@ -3053,7 +3090,8 @@ function ghostAt(cx, cy) {
   gGhost.add(grp);
 }
 
-document.querySelectorAll('.tbtn[data-tool]').forEach((b) => b.onclick = () => setTool(b.dataset.tool));
+$('#lvName').onclick = toggleMenu;
+$('#hold').onclick = () => showReport(rateMet());
 $('#rotBtn').onclick = () => {
   if (selected && MACHINES[selected.type].kind !== 'sink') {
     const old = selected.rot;
@@ -3068,15 +3106,12 @@ $('#rotBtn').onclick = () => {
     toast('Placing at ' + (pickedRot * 90) + '°');
   }
 };
-$('#camBtn').onclick = () => { yawTarget += Math.PI / 2; };
-$('#plannerBtn').onclick = () => { plannerOn = !plannerOn; $('#plannerBtn').classList.toggle('on', plannerOn); };
-$('#scoreBtn').onclick = () => showReport(quotaMet());
-$('#clearBtn').onclick = () => {
-  dropWhere(ents, (e) => MACHINES[e.type].kind !== 'sink');
-  links.length = 0; selected = null; showInspector(null);
-  $('#report').style.display = 'none';
-  resolve();
+$('#plannerBtn').onclick = () => {
+  plannerOn = !plannerOn;
+  $('#plannerBtn').classList.toggle('on', plannerOn);
+  $('#plannerBtn').textContent = plannerOn ? 'Hide rates' : 'Show rates';
 };
+
 addEventListener('resize', layoutCamera);
 
 /* ============================================================
@@ -3215,8 +3250,8 @@ function loadLevel(i) {
   setTool('select');
   resolve();
   refreshCrumbs();
-  $('#levelBar').style.top = ($('#docket').offsetHeight + 8) + 'px';
-  $('#crumbs').style.top = ($('#docket').offsetHeight + 40) + 'px';
+  $('#menu').style.top = ($('#docket').offsetHeight + 6) + 'px';
+  $('#crumbs').style.top = ($('#docket').offsetHeight + 8) + 'px';
 }
 
 /* ============================================================

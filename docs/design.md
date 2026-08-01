@@ -1,6 +1,8 @@
-# RATIO — Game Design Document (v0.7)
+# RATIO — Game Design Document (v0.8)
 
 *Working title. Alternatives: Throughput, Feedstock, Assembly Line, Per Minute.*
+
+**v0.8:** the control surface is gestures and cards — thirteen persistent buttons down to two (§10).
 
 **v0.7:** factories are player-built boxes that can be entered and nested; every placement is an independent copy of a library design, with ports defined by terminals on the interior walls (§7).
 
@@ -308,27 +310,34 @@ These are genuinely in tension: the ore-optimal solution usually needs more mach
 
 ## 10. Controls (mobile-first)
 
+**Every action is a gesture or a card. There are no mode buttons.**
+
 | Action | Input |
 |---|---|
 | Pan | one-finger drag on empty ground |
 | Zoom | pinch |
-| Rotate camera | two-finger twist, **snapping to 90°** |
-| Place machine | pick from the bottom bar, tap to place |
-| Rotate machine | tap machine → turn 90° |
-| **Paint belt** | **press on a machine and drag; release on the target. A live preview shows green for a valid route, red for a blocked one** |
-| Delete | long-press, or dedicated erase mode for bulk |
-| Inspect | tap |
+| Turn the view | two-finger twist, snapping to 90° on release |
+| Inspect | tap a machine or a belt |
+| **Paint a belt** | **drag from one machine to another** |
+| Place a machine | pick a card, drag on the plot, release to commit |
+| Rotate | the one floating control, shown only while placing or with something selected |
+| Remove | inspect it, then Remove |
+| Upgrade a belt | tap the belt |
 
-Camera is orthographic at a **fixed 54° above the horizon**. (Three tilt steps were prototyped; 54° won on a phone — shallower looked better in stills but tall machines began hiding belts behind them.) A shallower angle shows the solidity of the world and makes the over-under at belt crossings legible; a steeper one keeps belt routes clear because tall machines occlude less. Still **no free orbit** — that destroys the readability of belt paths and makes drag-to-place ambiguous. Yaw is snapped to 90° only.
+**The simplification that mattered.** An earlier build had five mode buttons down the right edge — Select, Paint belt, Erase, Turn, Rotate view — plus Planner, Score and Clear along the bottom and a row of five level buttons. Thirteen persistent controls.
+
+Three of those tools described something the hand already says. Painting a belt is a drag that begins on a machine; inspecting one is a tap on it. Those are different gestures, so a mode to distinguish them is pure overhead: the stroke now starts speculatively on press and is discarded on release if the finger never moved. Erase was redundant with the Remove action already in the inspector. That is three buttons gone for nothing lost.
+
+The rest went by relocation rather than deletion. Rotate appears only when there is something to rotate. View rotation became the twist gesture. Score is reached by tapping the progress bar, which is where a player already looks. Level selection and Clear moved into a menu behind the level title — and Clear in particular is better off the main surface, since there is still no undo. Belt tiers left the tray entirely: a tier is a property of a belt, not a thing you place, so belts start at Mk1 and are upgraded by tapping them, which is exactly what level 3 teaches.
+
+**Two persistent controls remain:** a rates toggle, and the tray of things you can place.
+
+Camera is orthographic at a **fixed 54° above the horizon**. (Three tilt steps were prototyped; 54° won on a phone — shallower looked better in stills but tall machines began hiding belts behind them.) Yaw snaps to 90°; there is no free orbit, which would destroy the readability of belt paths and make drag-to-place ambiguous.
 
 Two consequences of an oblique view that are easy to get wrong:
 
-- **Hit testing must use the machine meshes, not the ground plane.** At 44° the visible top of a miner's drill tower sits about 2 m behind its footprint, so a ground-plane raycast misses the thing the player is obviously pointing at. Placement still uses the ground, because there the player is indicating a position rather than an object.
+- **Hit testing must use the machine meshes, not the ground plane.** At an angle the visible top of a miner's drill tower sits about 2 m behind its footprint, so a ground-plane raycast misses the thing the player is obviously pointing at. Placement still uses the ground, because there the player is indicating a position rather than an object.
 - **Panning divides by sin(pitch), not cos.** A ground step along the view's depth axis projects onto the screen vertical by sin(pitch). Getting this wrong makes vertical panning feel wrong in a way that is hard to name and easy to ship.
-
-The bottom bar is a horizontally scrolling machine palette with the module drawer as a separate tab. Everything reachable one-thumbed.
-
----
 
 ## 11. Art direction
 
