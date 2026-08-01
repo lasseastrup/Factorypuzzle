@@ -1590,7 +1590,11 @@ function outItemOf(e, depth) {
     const up = links.find((l) => l.to === e.id);
     return up ? outItemOf(entById(up.from), (depth || 0) + 1) : (e.feedItem || null);
   }
-  if (d.kind === 'splitter' || d.kind === 'merger') {
+  /* A junction reports whatever is flowing through it, traced upstream. This read
+     d.kind === 'splitter' || 'merger' and was missed when both became 'junction', so a
+     junction stopped reporting its contents: item checks downstream saw null, and belts
+     leaving one could not be matched to a machine's input slot. */
+  if (d.kind === 'junction') {
     const up = links.find((l) => l.to === e.id);
     return up ? outItemOf(entById(up.from), (depth || 0) + 1) : null;
   }
@@ -1733,20 +1737,35 @@ function attachOn(e, toward) {
 }
 
 const hasFixedPorts = (e) => MACHINES[e.type].kind === 'factory' || MACHINES[e.type].kind === 'pass';
+const isJunction = (e) => MACHINES[e.type].kind === 'junction';
+
+/* Which axis points from one thing to another, for laying an approach run in. */
+function axisToward(from, to) {
+  const dx = to.x - from.x, dz = to.z - from.z;
+  return Math.abs(dx) >= Math.abs(dz) ? { x: Math.sign(dx) || 1, z: 0 } : { x: 0, z: Math.sign(dz) || 1 };
+}
 
 /* Resolve both ends of a belt: fixed geometry where it carries meaning, otherwise the
    nearest perimeter point to the other end. */
 function beltEnds(a, aSlot, b, bSlot, raw) {
   const aim = (from, to, hintPt) => hintPt || { x: to.x, z: to.z };
   let pa, na, pb, nb;
-  if (hasFixedPorts(a)) {
+  if (isJunction(a)) {
+    /* A junction has no body, so a belt meets it at the point itself. Attaching to a
+       footprint edge would leave a metre of nothing where the fitting used to be. */
+    pa = { x: a.x, z: a.z };
+    na = axisToward(a, b);
+  } else if (hasFixedPorts(a)) {
     pa = portsOf(a).out[aSlot];
     na = portNormal(a, pa);
   } else {
     const t = attachOn(a, aim(a, b, raw && raw.length > 2 ? raw[Math.min(2, raw.length - 1)] : null));
     pa = { x: t.x, z: t.z }; na = t.n;
   }
-  if (hasFixedPorts(b)) {
+  if (isJunction(b)) {
+    pb = { x: b.x, z: b.z };
+    nb = axisToward(b, a);
+  } else if (hasFixedPorts(b)) {
     pb = portsOf(b).in[bSlot];
     nb = portNormal(b, pb);
   } else {
@@ -1758,11 +1777,13 @@ function beltEnds(a, aSlot, b, bSlot, raw) {
      free and their faces are parallel, choose a shared value so the run lines up — two
      approach runs that differ by a few centimetres would otherwise force an elbow too
      short to fillet, which is the ugliest thing a corner can be. */
-  if (!hasFixedPorts(a) && !hasFixedPorts(b) && na.x === 0 && nb.x === 0) {
+  if (!hasFixedPorts(a) && !hasFixedPorts(b) && !isJunction(a) && !isJunction(b)
+      && na.x === 0 && nb.x === 0) {
     const ba = boxOf(a, 0.06), bb = boxOf(b, 0.06);
     const lo = Math.max(ba.x0 + 0.3, bb.x0 + 0.3), hi = Math.min(ba.x1 - 0.3, bb.x1 - 0.3);
     if (lo <= hi) { const x = Math.max(lo, Math.min(hi, (pa.x + pb.x) / 2)); pa.x = x; pb.x = x; }
-  } else if (!hasFixedPorts(a) && !hasFixedPorts(b) && na.z === 0 && nb.z === 0) {
+  } else if (!hasFixedPorts(a) && !hasFixedPorts(b) && !isJunction(a) && !isJunction(b)
+             && na.z === 0 && nb.z === 0) {
     const ba = boxOf(a, 0.06), bb = boxOf(b, 0.06);
     const lo = Math.max(ba.z0 + 0.3, bb.z0 + 0.3), hi = Math.min(ba.z1 - 0.3, bb.z1 - 0.3);
     if (lo <= hi) { const z = Math.max(lo, Math.min(hi, (pa.z + pb.z) / 2)); pa.z = z; pb.z = z; }
@@ -2291,14 +2312,10 @@ function buildMachines() {
       part(g, new THREE.BoxGeometry(0.34, 0.2, 0.4), MATG(DARK), 0, 0.4, d / 2 - 0.1);
 
     } else if (def.kind === 'junction') {
-      /* A junction is a fitting, not a machine. It was a hexagonal drum nearly as tall as
-         a smelter, which made a line of them look like a row of buildings; it is now a low
-         plate that reads as part of the belt run. */
-      part(g, new THREE.BoxGeometry(0.66, 0.1, 0.66), MET(0x6a7076), 0, 0.29, 0);
-      part(g, new THREE.BoxGeometry(0.44, 0.06, 0.44), MET(0x9aa1a6), 0, 0.35, 0);
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-        part(g, new THREE.BoxGeometry(0.07, 0.26, 0.07), MATG(DARK), sx * 0.27, 0.13, sz * 0.27);
-      }
+      /* Nothing is drawn. A junction is a fact about the graph — material divides here — not
+         an object in the world, and the belts now show it themselves by meeting at a point
+         and forking. A model there was a box sitting in the middle of a fork, which is what
+         made junctions read as clutter rather than as plumbing. */
 
     } else if (def.kind === 'factory') {
       /* a shell, deliberately blank: what matters is inside */
@@ -2325,7 +2342,7 @@ function buildMachines() {
        Placed in local space. The group is already rotated, so using world offsets
        here would rotate them a second time and put every port on the wrong face. */
     const P = localPorts(e);
-    P.out.forEach((p, i) => {
+    if (!isJunction(e)) P.out.forEach((p, i) => {
       part(g, new THREE.BoxGeometry(0.4, 0.22, 0.3), MATG(DARK), p.x, 0.34, p.z);
       part(g, new THREE.BoxGeometry(0.3, 0.07, 0.18), MET(0x8f9a5a), p.x, 0.47, p.z, false);
       /* An unused output gets a bobbing arrow. Removing the Belt cards and the Paint
@@ -2341,7 +2358,7 @@ function buildMachines() {
         (anim.hints = anim.hints || []).push(arrow);
       }
     });
-    P.in.forEach((p, i) => {
+    if (!isJunction(e)) P.in.forEach((p, i) => {
       const item = P.inItems[i];
       part(g, new THREE.BoxGeometry(0.36, 0.2, 0.28),
         MET(item ? ITEMS[item].color : 0xd2cdbe), p.x, 0.32, p.z);
@@ -2532,7 +2549,13 @@ function buildBelts() {
   const rollers = [];
   for (const l of links) {
     if (!l.path || l.path.length < 2) continue;
-    for (const [s, i] of [[0.06, 1], [l.length - 0.06, l.path.length - 2]]) {
+    /* A drum belongs where a run terminates. At a fork the belts continue, so drums there
+       would draw three ends meeting instead of one line dividing. */
+    const ends = [];
+    const sJ = entById(l.from), dJ = entById(l.to);
+    if (!sJ || !isJunction(sJ)) ends.push([0.06, 1]);
+    if (!dJ || !isJunction(dJ)) ends.push([l.length - 0.06, l.path.length - 2]);
+    for (const [s, i] of ends) {
       const p = posAt(l, Math.max(0, Math.min(l.length, s)));
       const q = l.path[Math.max(0, Math.min(l.path.length - 1, i))];
       /* posAt reports where an ITEM rides, which is 0.13 above the belt. Using it
@@ -3222,6 +3245,13 @@ function showInspector(e) {
       html += '<div class="row"><span>' + ITEMS[item].short + '</span><span>' + fmt(got) + ' / ' + rate + '/min</span></div>';
     }
   }
+  if (isJunction(e)) {
+    const ins = links.filter((l) => l.to === e.id).length;
+    const outs = links.filter((l) => l.from === e.id).length;
+    html += '<div class="row"><span>Belts</span><span>' + ins + ' in / ' + outs + ' out</span></div>';
+    const through = links.filter((l) => l.from === e.id).reduce((t, l) => t + (l.flow || 0), 0);
+    html += '<div class="row"><span>Passing</span><span>' + fmt(through) + '/min</span></div>';
+  }
   if (def.kind === 'factory') {
     const fp = factoryPorts(e);
     html += '<div class="row"><span>Ports</span><span>' + fp.in.length + ' in / ' + fp.out.length + ' out</span></div>';
@@ -3281,7 +3311,24 @@ function showInspector(e) {
       toast('Saved. Place copies from the tray.');
       return;
     }
-    if (b.dataset.act === 'del') { removeEntity(e); selected = null; showInspector(null); computeCrossings(); resolve(); }
+    if (b.dataset.act === 'del') {
+      /* Removing a junction that merely passes material through should heal the line rather
+         than sever it. The player never placed the fitting — they branched a belt — so
+         deleting the branch ought to put the belt back. */
+      const wasJunction = isJunction(e);
+      const ins = links.filter((l) => l.to === e.id), outs = links.filter((l) => l.from === e.id);
+      const rejoin = wasJunction && ins.length === 1 && outs.length === 1
+        ? [entById(ins[0].from), entById(outs[0].to), ins[0].tier] : null;
+      removeEntity(e);
+      selected = null; showInspector(null);
+      if (rejoin && rejoin[0] && rejoin[1]) {
+        const prevTier = beltTier;
+        beltTier = rejoin[2];
+        if (!connectByTap(rejoin[0], rejoin[1])) toast('Junction removed \u2014 rejoin the line by hand.');
+        beltTier = prevTier;
+      }
+      computeCrossings(); resolve();
+    }
     if (b.dataset.act === 'recipe') {
       const rs = def.recipes, i = rs.findIndex((x) => x.id === e.recipe);
       e.recipe = rs[(i + 1) % rs.length].id;

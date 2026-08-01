@@ -177,13 +177,14 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'spliceJunction',
   'nearestFreeSpot',
   'orientPair',
-  'beltAt'];
+  'beltAt',
+  'isJunction'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
   + '\n;globalThis.__pickDesign = function (d) { pickedType = "factory"; pickedDesign = d; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
-  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, getSelected: function(){return selected;}, deleteLink: function(l){ dropWhere(links, function(x){return x===l;}); computeCrossings(); }, getToast: function(){return document.getElementById("toast").textContent||"";}, hintText: function(){return document.getElementById("lvHint").textContent||"";}, getBeltFrom: function(){return beltFrom;}, armBelt: function(t){ if(tool==="belt" && beltTier===t) setTool("select"); else {beltTier=t;beltFrom=null;setTool("belt");} buildTray(); }, getStroke: function(){return stroke;}, getTool: function(){return tool;}, getPicked: function(){return pickedType;}, select: function(e){selected=e;buildMachines();showInspector(e);refreshRotate();}, armCard: function(t,r){ if(pickedType===t && pickedRecipe===(r||null)) setTool("select"); else {pickedType=t;pickedRecipe=r||null;pickedDesign=null;setTool("place");} buildTray(); }, selectNothing: function(){selected=null;showInspector(null);refreshRotate();}, rotVisible: function(){return document.getElementById("rotBtn").classList.contains("show");}, trayLabels: function(){return Array.from(document.querySelector("#trayScroll").children).map(function(c){return c.innerHTML;});}, menuHtml: function(){return document.getElementById("menu").innerHTML||"";}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
+  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, getSelected: function(){return selected;}, deleteLink: function(l){ dropWhere(links, function(x){return x===l;}); computeCrossings(); }, dropLink: function(l){ dropWhere(links, function(x){return x===l;}); }, removeJunctionHealing: function(e){ var ins=links.filter(function(l){return l.to===e.id;}), outs=links.filter(function(l){return l.from===e.id;}); var a=ins.length===1?entById(ins[0].from):null, b=outs.length===1?entById(outs[0].to):null, tier=ins.length?ins[0].tier:1; removeEntity(e); if(a&&b){ var pt=beltTier; beltTier=tier; connectByTap(a,b); beltTier=pt; } computeCrossings(); }, getToast: function(){return document.getElementById("toast").textContent||"";}, hintText: function(){return document.getElementById("lvHint").textContent||"";}, getBeltFrom: function(){return beltFrom;}, armBelt: function(t){ if(tool==="belt" && beltTier===t) setTool("select"); else {beltTier=t;beltFrom=null;setTool("belt");} buildTray(); }, getStroke: function(){return stroke;}, getTool: function(){return tool;}, getPicked: function(){return pickedType;}, select: function(e){selected=e;buildMachines();showInspector(e);refreshRotate();}, armCard: function(t,r){ if(pickedType===t && pickedRecipe===(r||null)) setTool("select"); else {pickedType=t;pickedRecipe=r||null;pickedDesign=null;setTool("place");} buildTray(); }, selectNothing: function(){selected=null;showInspector(null);refreshRotate();}, rotVisible: function(){return document.getElementById("rotBtn").classList.contains("show");}, trayLabels: function(){return Array.from(document.querySelector("#trayScroll").children).map(function(c){return c.innerHTML;});}, menuHtml: function(){return document.getElementById("menu").innerHTML||"";}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, getHold: function(){return deliveryProgress().worst;}, getClock: function(){return clockT;}, getDeliveries: function(){return deliveries.length;}, isReported: function(){return reported;}, DELIVER_WINDOW: DELIVER_WINDOW, deliveryProgress: function(){return deliveryProgress();}, rateMet: function(){return rateMet();}, solvedMap: function(){return solved;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
@@ -2496,3 +2497,99 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 16900);
+
+/* --- a junction is a fact about the graph, not an object ---
+   Nothing is drawn for it. The belts show it themselves by meeting at a point and forking,
+   which is what a fork in a conveyor actually looks like. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- invisible junctions ---');
+
+  api.loadLevel(4);
+  const lv = api.LEVELS[4];
+  const build = () => {
+    api.clearPlot();
+    const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+    const s1 = api.addEntity('smelter', 11, 8, 1);
+    const s2 = api.addEntity('smelter', 11, 12, 1);
+    api.resolve();
+    api.armBelt(1);
+    api.connectByTap(m, s1);
+    api.resolve();
+    const trunk = api.links()[0];
+    api.spliceJunction(trunk, trunk.path[Math.floor(trunk.path.length / 2)], s2);
+    api.resolve();
+    return { m, s1, s2, j: api.ents().find((e) => e.type === 'junction') };
+  };
+
+  const s = build();
+  ok(!!s.j, 'a junction exists in the graph');
+
+  /* but nothing is rendered for it */
+  const grp = api.gMachines.children.find((gr) => gr.userData.ent === s.j);
+  let meshes = 0;
+  if (grp) grp.traverse((o) => { if (o.isMesh) meshes++; });
+  ok(meshes === 0, `and nothing at all is drawn for it (${meshes} meshes)`);
+
+  /* every belt at it terminates exactly on the point, so the ribbons form one fork */
+  const at = api.links().filter((l) => l.from === s.j.id || l.to === s.j.id);
+  ok(at.length === 3, `three belts meet there (${at.length})`);
+  let worst = 0;
+  for (const l of at) {
+    const end = l.from === s.j.id ? l.path[0] : l.path[l.path.length - 1];
+    worst = Math.max(worst, Math.hypot(end.x - s.j.x, end.z - s.j.z));
+  }
+  ok(worst < 0.02, `and all of them land on it (worst ${worst.toFixed(3)} m)`);
+
+  /* a drum belongs where a run ends, not in the middle of a fork */
+  let drums = 0;
+  api.gBelts.traverse((o) => {
+    if (o.isInstancedMesh && o.geometry.type === 'CylinderGeometry') drums += o.count;
+  });
+  ok(drums === 3, `one drum per real terminus, none at the fork (${drums} for 3 belts)`);
+
+  /* it can still be selected and inspected, since the fork shows where it is */
+  const hit = api.entAt({ x: s.j.x, z: s.j.z });
+  ok(hit === s.j, 'tapping the fork finds the junction');
+  api.select(s.j);
+  ok(api.getSelected() === s.j, 'and it can be selected');
+  api.deselect();
+
+  /* removing a pass-through junction heals the line rather than severing it */
+  api.clearPlot();
+  const m2 = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const sm = api.addEntity('smelter', 12, 8, 1);
+  api.resolve();
+  api.armBelt(1);
+  api.connectByTap(m2, sm);
+  api.resolve();
+  const tr = api.links()[0];
+  const j2 = api.addEntity('junction', 8.5, 8.5, 0);
+  api.resolve();
+  /* wire miner -> junction -> smelter by hand, then delete the junction */
+  api.dropLink(tr);
+  api.connectByTap(m2, j2);
+  api.connectByTap(j2, sm);
+  api.resolve();
+  ok(api.links().length === 2, 'a junction sits in the middle of a line');
+  const flowBefore = api.links().filter((l) => l.to === j2.id)[0].flow;
+  api.removeJunctionHealing(j2);
+  api.resolve();
+  ok(api.ents().every((e) => e.type !== 'junction'), 'removing it takes it out of the graph');
+  ok(api.links().length === 1, `and the line is rejoined as one belt (${api.links().length})`);
+  /* the meaningful check: ore still runs at the same rate, end to end. An earlier version
+     compared the depot output, which was zero both before and after and proved nothing. */
+  const healed = api.links()[0];
+  ok(healed.from === m2.id && healed.to === sm.id, 'straight from the miner to the smelter');
+  ok(Math.abs((healed.flow || 0) - flowBefore) < 1e-6,
+    `carrying the same rate as before (${(healed.flow || 0).toFixed(0)} vs ${flowBefore.toFixed(0)}/min)`);
+  /* The smelter reads 0% here and that is correct: nothing is connected to its output, so
+     it is blocked. Asserting it runs would be asserting a bug. What matters is that the
+     rejoined belt delivers, which the previous two assertions cover. */
+  ok(sm.state === 'stopped' || sm.state === 'blocked',
+    `the smelter is held up by its own missing output rather than starved (${sm.state})`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 17400);
