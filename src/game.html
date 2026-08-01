@@ -1813,11 +1813,9 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('on'), 2100);
 }
-function updateRuler() {
-  const el = $('#ruler');
-  el.classList.toggle('on', links.length > 0);
-  el.textContent = beltMetres().toFixed(1) + ' m of belt · ' + links.length + ' run' + (links.length === 1 ? '' : 's');
-}
+/* The belt-metres pill is gone from the HUD; the figure lives in the score card,
+   which is where a player compares runs anyway. */
+function updateRuler() {}
 
 function buildTray() {
   const el = $('#trayScroll');
@@ -2696,8 +2694,7 @@ function loadLevel(i) {
   yaw = yawTarget = 0;
   layoutCamera();
 
-  $('#lvId').textContent = 'LV ' + String(lvIndex + 1).padStart(2, '0');
-  $('#lvName').textContent = L.name;
+  $('#lvName').textContent = (lvIndex + 1) + '. ' + L.name;
   $('#lvHint').textContent = L.hint;
   buildPad(); buildTray(); buildLevelBar(); buildItemPools();
   setTool('select');

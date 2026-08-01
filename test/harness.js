@@ -54,12 +54,19 @@ function El(tag) {
   return e;
 }
 
+/* Stub exactly the elements the page actually declares, read out of the HTML itself.
+   A hand-maintained list drifts: it will both invent elements the page dropped and
+   omit ones it gained, and either way the tests stop reflecting the real DOM. */
 const ids = {};
-for (const id of ['menu','rotBtn','labels', 'docket', 'lvId', 'lvName', 'lvHint', 'quotas', 'levelBar',
-                  'insp', 'trayScroll', 'bar2', 'run', 'plannerBtn', 'clearBtn',
-                  'report', 'rcard', 'toast', 'tools', 'tray', 'rotBtn', 'camBtn']) {
-  ids[id] = El('div');
+{
+  const src = fs.readFileSync(HTML, 'utf8');
+  const found = new Set();
+  const re = /id="([A-Za-z0-9_-]+)"/g;
+  let mm;
+  while ((mm = re.exec(src))) found.add(mm[1]);
+  for (const id of found) ids[id] = El('div');
 }
+
 const toolBtns = ['select', 'belt', 'erase'].map((t) => { const b = El('button'); b.dataset.tool = t; return b; });
 
 function collect(sel) {
@@ -70,7 +77,16 @@ function collect(sel) {
 global.document = {
   body: El('body'),
   createElement: (t) => El(t),
-  querySelector: (s) => (s[0] === '#' ? ids[s.slice(1)] || El('div') : El('div')),
+  /* Return null for an id that does not exist, exactly as a browser would. Handing
+     back a fresh element instead made the tests blind to code still poking at markup
+     that had been deleted — which is how a crash on level load shipped with 242
+     assertions passing. */
+  querySelector: (s) => {
+    if (s[0] !== '#') return El('div');
+    const id = s.slice(1);
+    if (!(id in ids)) return null;
+    return ids[id];
+  },
   querySelectorAll: collect,
   getElementById: (id) => ids[id] || null,
 };
@@ -1310,3 +1326,39 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 9400);
+
+/* --- no code may reference markup that does not exist ---
+   A crash on level load shipped because the UI pass deleted an element and left the
+   code that wrote to it. Checked statically as well as at runtime, since a reference
+   on a rarely-taken branch would not necessarily be executed by any test. */
+setTimeout(() => {
+  const fs2 = require('fs');
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- dom references ---');
+
+  const src = fs2.readFileSync(HTML, 'utf8');
+  const declared = new Set();
+  let mm;
+  const idRe = /id="([A-Za-z0-9_-]+)"/g;
+  while ((mm = idRe.exec(src))) declared.add(mm[1]);
+
+  const used = new Set();
+  const useRe = /\$\('#([A-Za-z0-9_-]+)'\)/g;
+  while ((mm = useRe.exec(src))) used.add(mm[1]);
+  const getRe = /getElementById\('([A-Za-z0-9_-]+)'\)/g;
+  while ((mm = getRe.exec(src))) used.add(mm[1]);
+
+  /* #fatal is created on demand by the error banner, so it is legitimately absent */
+  const created = new Set(['fatal']);
+  const dangling = [...used].filter((id) => !declared.has(id) && !created.has(id));
+  ok(dangling.length === 0,
+    dangling.length ? `code references missing elements: ${dangling.join(', ')}` : 'every element the code touches exists in the page');
+
+  /* and the reverse: markup nobody uses is dead weight worth noticing */
+  const structural = new Set(['docket', 'dockBody', 'tray', 'bar2', 'report']);
+  const unused = [...declared].filter((id) => !used.has(id) && !structural.has(id));
+  ok(unused.length <= 2, `little orphaned markup (${unused.length}: ${unused.join(', ') || 'none'})`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 9900);
