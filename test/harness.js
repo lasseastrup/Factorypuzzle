@@ -173,7 +173,11 @@ const exports_ = ['loadLevel','addEntity','resolve','scene','camera','quotaMet',
   'beltBackedUp',
   'beltItemCapacity',
   'flowSignature',
-  'keepItemTags'];
+  'keepItemTags',
+  'spliceJunction',
+  'nearestFreeSpot',
+  'orientPair',
+  'beltAt'];
 const wrapped = body
   + '\n;globalThis.__setStroke = function (e, p) { stroke = { fromEnt: e, fromPort: p, pts: [] }; };'
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
@@ -2370,3 +2374,125 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 16400);
+
+/* --- one junction, made by branching a belt --- */
+setTimeout(() => {
+  const THREE2 = require('three');
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- junctions by branching ---');
+
+  /* splitter and merger are one thing now */
+  ok(api.MACHINES.junction.kind === 'junction', 'there is a Junction');
+  ok(api.MACHINES.splitter.kind === 'junction' && api.MACHINES.merger.kind === 'junction',
+    'and the old splitter and merger resolve to it, so older designs still load');
+  ok(api.MACHINES.junction.name === 'Junction' && api.MACHINES.merger.name === 'Junction',
+    'all named Junction, since the fitting does both jobs');
+
+  api.loadLevel(4);
+  const lv = api.LEVELS[4];
+
+  /* not offered in the tray: it only comes from branching */
+  const cards = api.trayLabels().join(' ');
+  ok(!/Junction|Splitter|Merger/i.test(cards), 'no junction card in the tray');
+  ok(!lv.tech.some((t) => /junction|splitter|merger/.test(t)), 'nor in the level tech list');
+
+  const build = () => {
+    api.clearPlot();
+    const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+    const s1 = api.addEntity('smelter', 11, 8, 1);
+    const s2 = api.addEntity('smelter', 11, 12, 1);
+    api.resolve();
+    api.armBelt(1);
+    api.connectByTap(m, s1);
+    api.resolve();
+    return { m, s1, s2, trunk: api.links()[0] };
+  };
+
+  /* branch a running belt */
+  let b = build();
+  const midpoint = b.trunk.path[Math.floor(b.trunk.path.length / 2)];
+  ok(api.spliceJunction(b.trunk, midpoint, b.s2), 'a belt can be branched to a second machine');
+  api.resolve();
+  ok(api.links().length === 3, `one belt becomes three (${api.links().length})`);
+  const js = api.ents().filter((e) => e.type === 'junction');
+  ok(js.length === 1, 'with exactly one junction');
+  const jx = js[0];
+  ok(Math.abs(jx.x - Math.round(jx.x - 0.5) - 0.5) < 1e-6 && Math.abs(jx.z - Math.round(jx.z - 0.5) - 0.5) < 1e-6,
+    `and it lands on the metre grid (${jx.x}, ${jx.z})`);
+  const outs = api.links().filter((l) => l.from === jx.id);
+  const ins = api.links().filter((l) => l.to === jx.id);
+  ok(ins.length === 1 && outs.length === 2, `wired one in and two out (${ins.length}/${outs.length})`);
+  ok(Math.abs(ins[0].flow - 60) < 1e-6 && outs.every((o) => Math.abs(o.flow - 30) < 1e-6),
+    `and 60 in divides to ${outs.map((o) => o.flow.toFixed(0)).join('/')}`);
+
+  /* The same fitting merges. Needs two ore nodes, so this runs on the smelting-plant
+     level rather than the single-node one above. */
+  api.loadLevel(5);
+  const lv5 = api.LEVELS[5];
+  api.clearPlot();
+  const mA = api.addEntity('miner', lv5.nodes[0].x, lv5.nodes[0].z, 0);
+  const smA = api.addEntity('smelter', 11, 8.5, 1);
+  api.resolve();
+  api.armBelt(2);
+  api.connectByTap(mA, smA);
+  api.resolve();
+  b = { trunk: api.links()[0] };
+  const extra = api.addEntity('miner', lv5.nodes[1].x, lv5.nodes[1].z, 0);
+  api.resolve();
+  const mid2 = b.trunk.path[Math.floor(b.trunk.path.length / 2)];
+  ok(api.spliceJunction(b.trunk, mid2, extra), 'a second supply can be merged into a belt');
+  api.resolve();
+  const jx2 = api.ents().filter((e) => e.type === 'junction')[0];
+  const ins2 = api.links().filter((l) => l.to === jx2.id);
+  const outs2 = api.links().filter((l) => l.from === jx2.id);
+  ok(ins2.length === 2 && outs2.length === 1,
+    `the same fitting takes two in and one out (${ins2.length}/${outs2.length})`);
+  ok(outs2[0].flow > ins2[0].flow - 1e-6, `and combines them (${outs2[0].flow.toFixed(0)}/min out)`);
+
+  /* a failed splice must leave the belt exactly as it was */
+  api.loadLevel(4);
+  b = build();
+  const before = api.links().length;
+  const beforeIds = api.links().map((l) => l.id).join(',');
+  ok(!api.spliceJunction(b.trunk, b.trunk.path[1], b.s1),
+    'branching to a machine already on the belt is refused');
+  ok(api.links().length === before && api.links().map((l) => l.id).join(',') === beforeIds,
+    'and the original belt is untouched');
+  ok(api.ents().filter((e) => e.type === 'junction').length === 0, 'with no junction left behind');
+
+  /* A junction takes three each way and no more. Tested as port arithmetic rather than by
+     laying belts, so a blocked route cannot masquerade as a refused port — which it did in
+     an earlier version of this test. */
+  api.loadLevel(4);
+  api.clearPlot();
+  const j3 = api.addEntity('junction', 8, 8, 0);
+  const target = api.addEntity('smelter', 14, 8, 1);
+  api.resolve();
+  const fake = (from, to, slot) => ({
+    id: 'probe' + slot, from: from.id, to: to.id, fromPort: slot, slotFrom: slot,
+    toPort: 0, slotTo: 0, cap: 60, tier: 1, length: 1, bumps: [], items: [],
+    path: [{ x: 0, z: 0 }, { x: 1, z: 0 }], arc: [0, 1],
+  });
+  ok(api.freeOutPort(j3) === 0, 'a fresh junction has an output free');
+  api.links().push(fake(j3, target, 0));
+  ok(api.freeOutPort(j3) === 1, 'a second output after one is used');
+  api.links().push(fake(j3, target, 1));
+  api.links().push(fake(j3, target, 2));
+  ok(api.freeOutPort(j3) === -1, 'no fourth output');
+  ok(/three belts out/.test(api.portError(j3, target, null) || ''),
+    `and the refusal says why (${JSON.stringify(api.portError(j3, target, null))})`);
+  ok(api.freeInPort(j3, 'ore') >= 0, 'while the inputs are still free, since they are counted separately');
+
+  /* pressing on the visible belt must actually hit it, despite the camera angle */
+  api.loadLevel(4);
+  b = build();
+  const pt = b.trunk.path[Math.floor(b.trunk.path.length / 2)];
+  const v = new THREE2.Vector3(pt.x, api.BELT_Y, pt.z).project(api.camera);
+  const sx = (v.x * 0.5 + 0.5) * 390, sy = (-v.y * 0.5 + 0.5) * 844;
+  const gp = api.groundAt(sx, sy);
+  ok(!!api.beltAt(gp), 'a press aimed at the belt on screen lands on the belt');
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 16900);

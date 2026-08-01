@@ -35,7 +35,12 @@ const MACHINES = {
     name: 'Assembler', w: 3, h: 4, kind: 'machine', cost: 1,
     recipes: [{ id: 'reinf', label: 'Reinforced Plate', in: { plate: 20, screw: 90 }, out: { reinf: 10 } }],
   },
-  splitter: { name: 'Splitter', w: 1, h: 1, kind: 'splitter', cost: 0, recipes: [] },
+  /* One fitting for both jobs. It has no idea whether it is splitting or merging: it sums
+     whatever arrives and divides it evenly among whatever leaves, which is the same
+     arithmetic either way. Splitter and merger remain as aliases so older designs still
+     load, but the player is only ever offered a Junction. */
+  junction: { name: 'Junction', w: 1, h: 1, kind: 'junction', cost: 0, recipes: [] },
+  splitter: { name: 'Junction', w: 1, h: 1, kind: 'junction', cost: 0, recipes: [] },
   /* A factory is a box whose interior is built elsewhere. It has no behaviour of its
      own: the solver replaces it with a copy of its definition. */
   factory: { name: 'Factory', w: 4, h: 4, kind: 'factory', cost: 0, recipes: [] },
@@ -44,7 +49,7 @@ const MACHINES = {
      the terminal and the interior carries on from there. */
   termIn:  { name: 'Input', w: 1, h: 2, kind: 'pass', cost: 0, recipes: [], wallFixture: true },
   termOut: { name: 'Output', w: 1, h: 2, kind: 'pass', cost: 0, recipes: [], wallFixture: true },
-  merger:   { name: 'Merger',   w: 1, h: 1, kind: 'merger',   cost: 0, recipes: [] },
+  merger:   { name: 'Junction', w: 1, h: 1, kind: 'junction', cost: 0, recipes: [] },
   sink:     { name: 'Depot',    w: 2, h: 2, kind: 'sink',     cost: 0, recipes: [] },
 };
 
@@ -56,7 +61,7 @@ const BELTS = [
 
 const EPS = 1e-7;
 /* passthroughs carry material without transforming it */
-const isPass = (k) => k === 'splitter' || k === 'merger' || k === 'pass';
+const isPass = (k) => k === 'junction' || k === 'splitter' || k === 'merger' || k === 'pass';
 
 /* ---------- helpers ---------- */
 

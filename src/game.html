@@ -244,46 +244,46 @@ const LEVELS = [
     rocks: [{ x: 10, z: 1.2, r: 0.8 }, { x: 10, z: 16.6, r: 0.8 },
             { x: 13.6, z: 5.4, r: 0.7 }, { x: 13.6, z: 12.6, r: 0.7 }],
     quota: { reinf: 10 },
-    tech: ['miner', 'smelter', 'constructor', 'assembler', 'splitter', 'merger'], belts: [1, 2],
+    tech: ['miner', 'smelter', 'constructor', 'assembler'], belts: [1, 2],
     par: { machines: 8, belt: 46, ore: 60 } },
 
   { id: 'Twin', name: 'Two products, one node', rung: 4,
-    hint: 'One node, two products. A machine has one output, so place a Splitter to divide it.',
+    hint: 'One node, two products. A machine has one output \u2014 so run one belt, then drag off it to branch.',
     w: 19, h: 16,
     nodes: [{ x: 3, z: 8, rate: 60 }],
     depot: { x: 15.5, z: 8 },
     rocks: [{ x: 9, z: 3.4, r: 0.8 }, { x: 9, z: 12.6, r: 0.8 }, { x: 12, z: 8, r: 0.65 }],
     quota: { plate: 20, rod: 30 },
-    tech: ['miner', 'smelter', 'constructor', 'splitter', 'merger'], belts: [1, 2],
+    tech: ['miner', 'smelter', 'constructor'], belts: [1, 2],
     par: { machines: 5, belt: 34, ore: 60 } },
   { id: 'Plant', name: 'Smelting plant', rung: 4,
-    hint: '120 ore a minute into four smelters, and the Depot takes ONE belt \u2014 so merge before you deliver. A good candidate for a factory.',
+    hint: '120 ore into four smelters, and the Depot takes ONE belt. Drag off a belt to branch or merge it. A good candidate for a factory.',
     w: 23, h: 17,
     nodes: [{ x: 3, z: 4.5, rate: 60 }, { x: 3, z: 12.5, rate: 60 }],
     depot: { x: 20, z: 8.5 }, depotPorts: 1,
     rocks: [{ x: 8.5, z: 8.5, r: 0.8 }, { x: 15, z: 2.5, r: 0.7 }, { x: 15, z: 14.5, r: 0.7 }],
     quota: { ingot: 120 },
-    tech: ['miner', 'smelter', 'splitter', 'merger'], belts: [1, 2],
+    tech: ['miner', 'smelter'], belts: [1, 2],
     par: { machines: 6, belt: 58, ore: 120 } },
 
   { id: 'Manifold', name: 'The manifold', rung: 4,
-    hint: 'Six smelters along one corridor. Run a single fast trunk past them all and tap it with Splitters \u2014 Mk3 carries 240/min. Depot takes two belts.',
+    hint: 'Six smelters along one corridor. Run one fast trunk past them all and drag off it to tap each smelter \u2014 Mk3 carries 240/min.',
     w: 31, h: 12,
     nodes: [{ x: 3, z: 3, rate: 60 }, { x: 3, z: 6, rate: 60 }, { x: 3, z: 9, rate: 60 }],
     depot: { x: 28, z: 6 }, depotPorts: 2,
     rocks: [{ x: 12, z: 1.2, r: 0.7 }, { x: 20, z: 10.8, r: 0.7 }],
     quota: { ingot: 180 },
-    tech: ['miner', 'smelter', 'splitter', 'merger'], belts: [1, 2, 3],
+    tech: ['miner', 'smelter'], belts: [1, 2, 3],
     par: { machines: 9, belt: 96, ore: 180 } },
 
   { id: 'Balance', name: 'Balanced load', rung: 6,
-    hint: 'Mk1 belts only. No single belt can carry 180/min, so split at the source and keep every line under 60. Two smelters per merger.',
+    hint: 'Mk1 belts only. No single belt carries 180/min, so branch at the source and keep every run under 60.',
     w: 25, h: 19,
     nodes: [{ x: 3, z: 4, rate: 60 }, { x: 3, z: 9.5, rate: 60 }, { x: 3, z: 15, rate: 60 }],
     depot: { x: 21, z: 9.5 }, depotPorts: 3,
     rocks: [{ x: 11, z: 2, r: 0.75 }, { x: 11, z: 17, r: 0.75 }, { x: 16, z: 9.5, r: 0.7 }],
     quota: { ingot: 180 },
-    tech: ['miner', 'smelter', 'splitter', 'merger'], belts: [1],
+    tech: ['miner', 'smelter'], belts: [1],
     par: { machines: 9, belt: 82, ore: 180 } },
 
   { id: 'Triple', name: 'Three of a kind', rung: 5,
@@ -293,7 +293,7 @@ const LEVELS = [
     depot: { x: 19, z: 8.5 }, depotPorts: 1,
     rocks: [{ x: 9, z: 8.5, r: 0.8 }, { x: 14, z: 3, r: 0.7 }, { x: 14, z: 14, r: 0.7 }],
     quota: { plate: 60 },
-    tech: ['miner', 'smelter', 'constructor', 'splitter', 'merger'], belts: [1, 2],
+    tech: ['miner', 'smelter', 'constructor'], belts: [1, 2],
     par: { machines: 8, belt: 70, ore: 90 } },
 
   { id: 'Reinf20', name: 'Reinforced line', rung: 7,
@@ -303,7 +303,7 @@ const LEVELS = [
     depot: { x: 23, z: 10.5 }, depotPorts: 2,
     rocks: [{ x: 13, z: 1.5, r: 0.8 }, { x: 13, z: 19.5, r: 0.8 }, { x: 18, z: 10.5, r: 0.75 }],
     quota: { reinf: 20 },
-    tech: ['miner', 'smelter', 'constructor', 'assembler', 'splitter', 'merger'], belts: [1, 2],
+    tech: ['miner', 'smelter', 'constructor', 'assembler'], belts: [1, 2],
     par: { machines: 14, belt: 132, ore: 120 } },
 
 ];
@@ -311,7 +311,7 @@ const LEVELS = [
 const MACHINE_COLOR = {
   miner: 0x474d52, smelter: 0x9c4b36, constructor: 0x3d6a89,
   assembler: 0xa2833c, splitter: 0x5c6660, merger: 0x5c6660, sink: 0x2e5a48,
-  factory: 0x4a5b63, termIn: 0x4d7a4f, termOut: 0x7a4d4d,
+  factory: 0x4a5b63, termIn: 0x4d7a4f, termOut: 0x7a4d4d, junction: 0x6a7076,
 };
 const STATE_COLOR = {
   running: 0x2f9e6f, starved: 0xd99a20, throttled: 0xc9702c,
@@ -454,11 +454,11 @@ function localPorts(e) {
   const d = MACHINES[e.type];
   const fd = d.h / 2, cr = d.w / 2;
   const at = (fwd, side) => ({ x: side, z: fwd });
-  if (d.kind === 'splitter') {
-    return { out: [at(fd, 0), at(0, cr), at(0, -cr)], in: [at(-fd, 0)], inItems: [null] };
-  }
-  if (d.kind === 'merger') {
-    return { out: [at(fd, 0)], in: [at(-fd, 0), at(0, cr), at(0, -cr)], inItems: [null, null, null] };
+  if (d.kind === 'junction') {
+    /* Three each way, and which way a given belt goes is settled when it is drawn rather
+       than by which side of the fitting it touches. */
+    const three = [at(fd, 0), at(0, cr), at(0, -cr)];
+    return { out: three, in: [at(-fd, 0), at(0, cr * 0.6), at(0, -cr * 0.6)], inItems: [null, null, null] };
   }
   if (d.kind === 'sink') {
     return { out: [], in: [at(fd, 0), at(-fd, 0), at(0, cr), at(0, -cr)], inItems: [null, null, null, null] };
@@ -1106,13 +1106,13 @@ function portError(a, b, item) {
   if (da.kind === 'sink') return 'The depot only receives.';
   if (db.kind === 'miner') return 'A miner takes no input.';
   if (freeOutPort(a) < 0) {
-    return da.kind === 'splitter'
-      ? 'That splitter is full — three outputs is the limit.'
-      : da.name + ' has one output port. Place a splitter to fan the line out.';
+    return da.kind === 'junction'
+      ? 'That junction is full — three belts out is the limit.'
+      : da.name + ' has one output. Drag off its belt to branch it.';
   }
   if (db.kind === 'factory' || db.type === 'termOut' || db.kind === 'pass') {
     /* a factory or a terminal takes whatever is offered; the interior decides */
-  } else if (db.kind !== 'sink' && db.kind !== 'splitter' && db.kind !== 'merger') {
+  } else if (db.kind !== 'sink' && db.kind !== 'junction') {
     const r = recipeOf(b);
     if (!r || !Object.keys(r.in).length) return db.name + ' takes no input.';
     if (item && !r.in[item]) return db.name + ' has no use for ' + ITEMS[item].name + '.';
@@ -1122,8 +1122,7 @@ function portError(a, b, item) {
       const n = depotCap();
       return 'The Depot accepts ' + n + ' belt' + (n === 1 ? '' : 's') + ' here — merge your lines first.';
     }
-    if (db.kind === 'merger') return 'That merger is full — three inputs is the limit.';
-    if (db.kind === 'splitter') return 'A splitter takes one input. Use a merger to combine lines.';
+    if (db.kind === 'junction') return 'That junction is full — three belts in is the limit.';
     if (item && inboundItems(b).has(item)) return 'A belt is already delivering ' + ITEMS[item].name + ' here.';
     return item ? db.name + ' cannot take more ' + ITEMS[item].name + '.' : 'All inputs are fed.';
   }
@@ -1414,6 +1413,13 @@ function finishStroke(raw, a, aPort, b, bPort) {
 }
 
 function commitStroke(raw, endPoint, pickedEnd) {
+  /* started on a belt: splice a junction rather than laying a belt from nowhere */
+  if (stroke.fromBelt) {
+    const target = pickedEnd || entAt(endPoint);
+    if (!target) { toast('Drag from a belt to a machine to branch it.'); return; }
+    spliceJunction(stroke.fromBelt, stroke.at, target);
+    return;
+  }
   const a = stroke.fromEnt;
   const item = outItemOf(a);
   /* find the target: whatever machine the stroke ended on or nearest to */
@@ -1429,7 +1435,16 @@ function commitStroke(raw, endPoint, pickedEnd) {
     }
     b = best;
   }
-  if (!b) return toast('End the stroke on a machine.');
+  if (!b) {
+    /* released over a belt: splice a junction into it and feed it from here. The reverse of
+       branching, and the same operation — the junction sorts out which way each belt runs. */
+    const onto = beltAt(endPoint);
+    if (onto && onto.from !== a.id && onto.to !== a.id) {
+      spliceJunction(onto, endPoint, a);
+      return;
+    }
+    return toast('End the stroke on a machine, or on another belt.');
+  }
   /* If the stroke was drawn the wrong way round, turn it round rather than refusing. The
      path itself is reversed so the belt still follows what was drawn. */
   let src = a, dst = b, path0 = raw;
@@ -1564,6 +1579,7 @@ function contactShadow(w, d) {
 }
 const STEEL = 0xc9c5b6, DARK = 0x272c2e, TRIM = 0xa39b86;
 const MET = (c) => MATG(c, 26);      /* painted steel: matte colour with a faint highlight */
+const JUNCTION_COLOR = 0x6a7076;
 
 /* ---- draw-call budget ----
    Every machine is a dozen little boxes, and three.js issues one draw call per mesh. At
@@ -1651,7 +1667,7 @@ function buildMachines() {
 
     /* seat it: a soft contact blob, then a low plinth so the body does not simply
        intersect the floor at a hard line */
-    if (def.kind !== 'pass' && def.kind !== 'splitter' && def.kind !== 'merger') {
+    if (def.kind !== 'pass' && def.kind !== 'junction') {
       g.add(contactShadow(w, d));
       const plinth = new THREE.Mesh(GRAD(new THREE.BoxGeometry(w + 0.14, 0.1, d + 0.14)),
         MATG(0x6f7269));
@@ -1722,7 +1738,7 @@ function buildMachines() {
       part(g, new THREE.BoxGeometry(w * 0.5, 0.34, 0.3), MET(STEEL), 0, 0.68, -d / 2 + 0.3);
       part(g, new THREE.BoxGeometry(0.34, 0.2, 0.4), MATG(DARK), 0, 0.4, d / 2 - 0.1);
 
-    } else if (def.kind === 'splitter' || def.kind === 'merger') {
+    } else if (def.kind === 'junction') {
       /* A junction is a fitting, not a machine. It was a hexagonal drum nearly as tall as
          a smelter, which made a line of them look like a row of buildings; it is now a low
          plate that reads as part of the belt run. */
@@ -2092,7 +2108,7 @@ function posAt(l, s) {
    as reported: a queue building at the splitter, then two items admitted at once, then a
    pause. Junctions now transfer the item itself, so a queue can only form when an outgoing
    belt genuinely has no room. */
-const passKind = (k) => k === 'splitter' || k === 'merger' || k === 'pass';
+const passKind = (k) => k === 'junction' || k === 'pass';
 const backRoom = (l) => !l.items || !l.items.length || l.items[l.items.length - 1] >= JAM_SPACING;
 
 /* Choose which way an item goes, honouring the split the solver worked out: whichever
@@ -2661,7 +2677,7 @@ function showInspector(e) {
     const pi = e.portItems || {};
     for (const k of Object.keys(pi)) html += '<div class="row"><span>Out ' + k + '</span><span>' + ITEMS[pi[k]].short + '</span></div>';
   }
-  if (def.kind !== 'sink' && def.kind !== 'splitter' && def.kind !== 'merger') {
+  if (def.kind !== 'sink' && def.kind !== 'junction') {
     html += '<div class="row"><span>Running at</span><b style="color:#'
       + (STATE_COLOR[e.state] || 0x888888).toString(16).padStart(6, '0') + '">'
       + Math.round((e.f || 0) * 100) + '%</b></div>';
@@ -2776,7 +2792,7 @@ function updateLabels() {
   for (const e of ents) {
     const def = MACHINES[e.type];
     if (def.kind === 'sink') continue;
-    if (isLive(e) && def.kind !== 'splitter' && def.kind !== 'merger') {
+    if (isLive(e) && def.kind !== 'junction') {
       const pct = Math.round((e.f || 0) * 100);
       const cls = pct >= 100 ? 'ok' : (e.state === 'blocked' ? 'bad' : 'warn');
       let txt = '<b>' + pct + '%</b>';
@@ -2974,6 +2990,17 @@ cv.addEventListener('pointerdown', (ev) => {
     return;
   }
 
+  /* A drag that starts on a BELT branches it. Checked after machines, so a belt passing
+     under a machine's footprint does not steal the gesture. */
+  if (g && !machineAtScreen(ev.clientX, ev.clientY) && !entAt(g)) {
+    const onBelt = beltAt(g);
+    if (onBelt) {
+      stroke = { fromBelt: onBelt, at: { x: g.x, z: g.z }, fromEnt: null, fromPort: 0, pts: [] };
+      dragMode = 'paint';
+      return;
+    }
+  }
+
   /* Painting a belt is a drag that starts on a machine; selecting is a tap on one.
      Those are already different gestures, so the Select / Paint belt / Erase modes
      were pure overhead — three buttons to express something the hand already says.
@@ -3098,6 +3125,25 @@ cv.addEventListener('wheel', (ev) => {
 
 function drawStrokePreview() {
   clear(gGhost);
+  if (stroke.fromBelt) {
+    /* show where the junction will land, and a straight indication of the new run */
+    const spot = nearestFreeSpot('junction', stroke.at.x, stroke.at.z);
+    const tip = stroke.pts[stroke.pts.length - 1] || stroke.at;
+    const grp = new THREE.Group();
+    if (spot) {
+      const box = new THREE.Mesh(new THREE.BoxGeometry(1, 0.4, 1),
+        new THREE.MeshBasicMaterial({ color: 0x2f6f8f, transparent: true, opacity: 0.3 }));
+      box.position.set(spot.x, 0.2, spot.z);
+      grp.add(box);
+    }
+    const from = spot || stroke.at;
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(
+      [from.x, BELT_Y, from.z, tip.x, BELT_Y, tip.z], 3));
+    grp.add(new THREE.Line(lg, new THREE.LineBasicMaterial({ color: 0x2f6f8f })));
+    gGhost.add(grp);
+    return;
+  }
   const a = stroke.fromEnt;
   const start = portsOf(a).out[stroke.fromPort];
   /* preview the orthogonal route, so what is shown is what lands */
@@ -3180,6 +3226,65 @@ function repairInputSlots() {
     const i = P.inItems.indexOf(it);
     if (i >= 0) { l.toPort = i; l.slotTo = i; }
   }
+}
+
+/* ---- branching an existing belt ----
+   Drag off a belt and a junction is spliced into it. The junction snaps to the metre grid,
+   and the three resulting runs are re-routed rather than the original path being cut in
+   half: reusing the normal router keeps one code path for every belt in the game, and the
+   player asked for a junction near there rather than for their exact curve to be preserved.
+
+   Everything is snapshotted first, because a half-applied splice — original belt gone, new
+   ones refused — would be far worse than a refusal. */
+function nearestFreeSpot(type, x, z) {
+  const base = snapPlacement(type, x, z, 0);
+  if (!canPlace(type, base.x, base.z, 0)) {
+    for (let r = 1; r <= 3; r++) {
+      for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]]) {
+        const c = { x: base.x + dx, z: base.z + dz };
+        if (!canPlace(type, c.x, c.z, 0)) return c;
+      }
+    }
+    return null;
+  }
+  return base;
+}
+
+function spliceJunction(link, at, other) {
+  const src = entById(link.from), dst = entById(link.to);
+  if (!src || !dst) return false;
+  if (other === src || other === dst) { toast('That is already on this belt.'); return false; }
+
+  const spot = nearestFreeSpot('junction', at.x, at.z);
+  if (!spot) { toast('No room for a junction there.'); return false; }
+
+  const keepLinks = links.slice(), keepEnts = ents.slice();
+  const tier = link.tier;
+  const restore = () => {
+    links.length = 0; for (const l of keepLinks) links.push(l);
+    ents.length = 0; for (const e of keepEnts) ents.push(e);
+  };
+
+  dropWhere(links, (l) => l === link);
+  const j = addEntity('junction', spot.x, spot.z, 0);
+  const prevTier = beltTier;
+  beltTier = tier;
+  const ok1 = connectByTap(src, j);
+  const ok2 = ok1 && connectByTap(j, dst);
+  const ok3 = ok2 && !!orientPair(j, other) && connectByTap(j, other);
+  beltTier = prevTier;
+
+  if (!ok3) {
+    restore();
+    computeCrossings();
+    resolve();
+    toast('Could not fit a junction there \u2014 the belt is unchanged.');
+    return false;
+  }
+  computeCrossings();
+  resolve();
+  toast('Junction added');
+  return true;
 }
 
 /* Which way round should a belt between these two go? The drawn direction wins when it is
