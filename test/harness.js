@@ -167,7 +167,7 @@ const wrapped = body
   + '\n;globalThis.__pick = function (t, r) { pickedType = t; pickedRecipe = r; };'
   + '\n;globalThis.__pickDesign = function (d) { pickedType = "factory"; pickedDesign = d; };'
   + '\n;globalThis.__api = { removeEntityById: function(id){ var e=ents.find(function(x){return x.id===id;}); if(e) removeEntity(e); buildMachines(); }, ents: function(){return ents;}, links: function(){return links;},'
-  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, getSelected: function(){return selected;}, getTool: function(){return tool;}, getPicked: function(){return pickedType;}, select: function(e){selected=e;buildMachines();showInspector(e);refreshRotate();}, armCard: function(t,r){ if(pickedType===t && pickedRecipe===(r||null)) setTool("select"); else {pickedType=t;pickedRecipe=r||null;pickedDesign=null;setTool("place");} buildTray(); }, selectNothing: function(){selected=null;showInspector(null);refreshRotate();}, rotVisible: function(){return document.getElementById("rotBtn").classList.contains("show");}, trayLabels: function(){return Array.from(document.querySelector("#trayScroll").children).map(function(c){return c.innerHTML;});}, menuHtml: function(){return document.getElementById("menu").innerHTML||"";}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
+  + ' getPhase: function(){return phase;}, getZoom: function(){return zoom;}, getPointerCount: function(){return pointers.size;}, getDragMode: function(){return dragMode;}, getCam: function(){return {x:camCenter.x,z:camCenter.z};}, getPinched: function(){return pinched;}, getPitch: function(){return pitch;}, getCtx: function(){return ctx;}, getSelected: function(){return selected;}, getToast: function(){return document.getElementById("toast").textContent||"";}, hintText: function(){return document.getElementById("lvHint").textContent||"";}, getStroke: function(){return stroke;}, getTool: function(){return tool;}, getPicked: function(){return pickedType;}, select: function(e){selected=e;buildMachines();showInspector(e);refreshRotate();}, armCard: function(t,r){ if(pickedType===t && pickedRecipe===(r||null)) setTool("select"); else {pickedType=t;pickedRecipe=r||null;pickedDesign=null;setTool("place");} buildTray(); }, selectNothing: function(){selected=null;showInspector(null);refreshRotate();}, rotVisible: function(){return document.getElementById("rotBtn").classList.contains("show");}, trayLabels: function(){return Array.from(document.querySelector("#trayScroll").children).map(function(c){return c.innerHTML;});}, menuHtml: function(){return document.getElementById("menu").innerHTML||"";}, ortho: function(){return lastOrtho;}, library: function(){return library;}, setPitch: function(v){pitch=pitchTarget=v;}, getResult: function(){return result;},'
   + ' getSpinUp: function(){return spinUp;}, getHold: function(){return deliveryProgress().worst;}, getClock: function(){return clockT;}, getDeliveries: function(){return deliveries.length;}, isReported: function(){return reported;}, DELIVER_WINDOW: DELIVER_WINDOW, deliveryProgress: function(){return deliveryProgress();}, rateMet: function(){return rateMet();}, solvedMap: function(){return solved;}, setPlanner: function(v){plannerOn=v;},'
   + exports_.map(function(k){return ' ' + k + ': ' + k;}).join(',') + ' };';
 
@@ -1431,3 +1431,94 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 10400);
+
+/* --- belts must be paintable everywhere, and be discoverable ---
+   Removing the Belt cards and the Paint belt tool in one pass left no visible trace
+   that belts existed. Painting worked; nothing said so. */
+setTimeout(() => {
+  const THREE2 = require('three');
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- belts outside factories ---');
+
+  const cv = api.renderer.domElement;
+  const S = (x, z) => {
+    const v = new THREE2.Vector3(x, 0, z).project(api.camera);
+    return { x: (v.x * 0.5 + 0.5) * 390, y: (-v.y * 0.5 + 0.5) * 844 };
+  };
+  const drag = (a, b) => {
+    const A = S(a.x, a.z), B = S(b.x, b.z);
+    cv.fire('pointerdown', { pointerId: 1, clientX: A.x, clientY: A.y });
+    for (let t = 0.15; t <= 1.0001; t += 0.15) {
+      cv.fire('pointermove', { pointerId: 1, clientX: A.x + (B.x - A.x) * t, clientY: A.y + (B.y - A.y) * t });
+    }
+    cv.fire('pointerup', { pointerId: 1, clientX: B.x, clientY: B.y });
+  };
+
+  api.loadLevel(1);
+  const lv = api.LEVELS[1];
+  const m = api.addEntity('miner', lv.nodes[0].x, lv.nodes[0].z, 0);
+  const sm = api.addEntity('smelter', 6, 3.5, 1);
+  api.resolve();
+
+  /* the gesture must be advertised before any belt exists */
+  ok(/rag from/.test(api.hintText()), `the hint names the gesture while no belt exists`);
+  const arrows = api.gMachines.children
+    .reduce((n, gr) => n + ((gr.userData.anim && gr.userData.anim.hints) || []).length, 0);
+  ok(arrows >= 2, `unused output ports carry a drag arrow (${arrows})`);
+
+  /* paint in the level */
+  let n = api.links().length;
+  drag(m, sm);
+  ok(api.links().length === n + 1, 'a belt can be painted in the level');
+  ok(!/rag from/.test(api.hintText()), 'and the prompt stops once one exists');
+
+  /* the arrow on that port must be gone now it is used */
+  const minerGroup = api.gMachines.children.find((gr) => gr.userData.ent === m);
+  ok(((minerGroup.userData.anim || {}).hints || []).length === 0, 'a used port drops its arrow');
+
+  /* after visiting a factory, painting in the level must still work */
+  const d = api.newDesign('S');
+  api.editDesign(d);
+  const c = api.getCtx();
+  globalThis.__pick('termIn', null); api.setTool('place'); api.placeAt({ x: 0.4, z: 4 });
+  globalThis.__pick('termOut', null); api.setTool('place'); api.placeAt({ x: c.w - 0.4, z: 4 });
+  ok(api.links().length === 0, 'a fresh interior has no belts');
+  ok(/rag from/.test(api.hintText()), 'and the interior advertises the gesture too');
+  api.exitContext();
+  ok(api.getCtx().kind === 'level', 'back out in the level');
+
+  const co = api.addEntity('constructor', 11, 3.5, 1);
+  co.recipe = 'plate';
+  api.resolve();
+  n = api.links().length;
+  drag(sm, co);
+  ok(api.links().length === n + 1, 'painting still works after visiting a factory');
+
+  /* into and out of a placed box */
+  const findSpot = (t) => {
+    for (let z = 8; z < lv.h - 2.5; z += 0.5) for (let x = 3; x < lv.w - 2.5; x += 0.5) {
+      if (!api.canPlace(t, x, z, 0)) return { x, z };
+    }
+    return null;
+  };
+  globalThis.__pickDesign(d); api.setTool('place');
+  api.placeAt(findSpot('factory'));
+  const box = api.ents().filter((e) => e.type === 'factory').pop();
+  n = api.links().length;
+  drag(co, box);
+  ok(api.links().length === n + 1, 'a belt can be painted INTO a factory');
+  const depot = api.ents().find((e) => api.MACHINES[e.type].kind === 'sink');
+  n = api.links().length;
+  drag(box, depot);
+  ok(api.links().length === n + 1, 'and out of one');
+
+  /* dragging off a machine with no spare output explains itself instead of just panning */
+  n = api.links().length;
+  drag(m, co);
+  ok(api.links().length === n, 'a second belt off one output is not created');
+  ok(/already in use/.test(api.getToast()), `and the reason is said out loud (${JSON.stringify(api.getToast())})`);
+
+  console.log(`\n${p} passed, ${f} failed`);
+}, 10900);

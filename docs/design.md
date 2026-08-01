@@ -334,6 +334,8 @@ The rest went by relocation rather than deletion. Rotate appears only when there
 
 **Two persistent controls remain:** a rates toggle, and the tray of things you can place.
 
+**A gesture has to be advertised where it is performed.** Removing the Belt cards and the Paint belt tool in the same pass left nothing anywhere in the interface indicating that belts existed — painting worked perfectly and nothing said so, which is indistinguishable from the feature having been removed. Three cues fix it without reintroducing a mode: an unused output port carries a slowly bobbing arrow, the hint line names the verb until the player has laid their first belt in that context, and dragging off a machine whose output is already taken says so rather than silently panning. The general rule: deleting a control also deletes the only place the interface explained itself, and the explanation has to be re-homed.
+
 **Arming is never sticky.** Placing something returns to the neutral state. Leaving the tool armed after a placement meant every later drag laid another blueprint instead of moving the camera, which reads as the view being stuck rather than as a mode being active — a mode with no visible border is indistinguishable from a bug. One extra tap to place a second machine is much the cheaper cost. For the same reason a card is a toggle, so arming can always be undone without placing anything.
 
 Camera is orthographic at a **fixed 54° above the horizon**. (Three tilt steps were prototyped; 54° won on a phone — shallower looked better in stills but tall machines began hiding belts behind them.) Yaw snaps to 90°; there is no free orbit, which would destroy the readability of belt paths and make drag-to-place ambiguous.

@@ -1360,10 +1360,22 @@ function buildMachines() {
        Placed in local space. The group is already rotated, so using world offsets
        here would rotate them a second time and put every port on the wrong face. */
     const P = localPorts(e);
-    for (const p of P.out) {
+    P.out.forEach((p, i) => {
       part(g, new THREE.BoxGeometry(0.4, 0.22, 0.3), MAT(DARK), p.x, 0.34, p.z);
       part(g, new THREE.BoxGeometry(0.3, 0.07, 0.18), MAT(0x8f9a5a), p.x, 0.47, p.z, false);
-    }
+      /* An unused output gets a bobbing arrow. Removing the Belt cards and the Paint
+         belt tool in the same pass left nothing in the interface hinting that belts
+         exist at all, so the gesture had to be taught where it is performed. */
+      const used = links.some((l) => l.from === e.id && (l.slotFrom == null ? l.fromPort : l.slotFrom) === i);
+      if (!used && def.kind !== 'sink') {
+        const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.34, 4),
+          new THREE.MeshBasicMaterial({ color: 0x2f6f8f, transparent: true, opacity: 0.85 }));
+        arrow.position.set(p.x, 0.78, p.z);
+        arrow.rotation.x = Math.PI;
+        g.add(arrow);
+        (anim.hints = anim.hints || []).push(arrow);
+      }
+    });
     P.in.forEach((p, i) => {
       const item = P.inItems[i];
       part(g, new THREE.BoxGeometry(0.36, 0.2, 0.28),
@@ -1754,6 +1766,7 @@ function resolve() {
   deliveries = [];           /* the line must run undisturbed to count */
   buildAll();
   refreshQuotas();
+  refreshHint();
   updateRuler();
 }
 function scheduleSpinUp(prev) {
@@ -1943,6 +1956,15 @@ function updateHold(met, prog) {
   bar.style.width = (Math.min(1, w ? w.frac : 0) * 100).toFixed(0) + '%';
   txt.textContent = 'DEPOT ' + (w ? w.have + ' / ' + w.need + ' ' + ITEMS[w.item].short : '')
     + ' \u00b7 LAST ' + DELIVER_WINDOW + 's';
+}
+
+/* The level hint carries the lesson; this carries the verb, and only until the player
+   has demonstrated it once in this context. */
+function refreshHint() {
+  const base = L.hint || '';
+  const needsBelt = links.length === 0 && ents.filter((e) => MACHINES[e.type].kind !== 'sink').length > 0;
+  const verb = 'Drag from a machine\u2019s blue arrow to lay a belt.';
+  $('#lvHint').textContent = (needsBelt && base.indexOf('rag from') === -1) ? base + ' ' + verb : base;
 }
 
 function refreshQuotas() {
@@ -2222,7 +2244,7 @@ const pointers = new Map();
    landing during a pinch assigned the Vector3 while the pinch was still active,
    and Vector3 * number is NaN. That poisoned the zoom permanently and left the
    camera frustum non-finite, so nothing rendered but the sky. */
-let dragMode = null, dragStart = null, pinchStart = 0, moved = 0, pinched = false;
+let dragMode = null, dragStart = null, pinchStart = 0, moved = 0, pinched = false, grabbed = null;
 let panStart = new THREE.Vector3(), zoomStart = 0, pinchAngle = 0, yawStart = 0;
 
 /* Every gesture is measured against a baseline: pinch against a starting finger
@@ -2326,6 +2348,7 @@ cv.addEventListener('pointerdown', (ev) => {
      were pure overhead — three buttons to express something the hand already says.
      The stroke starts speculatively and is discarded on lift if the finger never
      moved, which is what makes the same press serve both purposes. */
+  grabbed = null;
   if (g) {
     const picked = machineAtScreen(ev.clientX, ev.clientY) || entAt(g);
     if (picked && freeOutPort(picked) >= 0) {
@@ -2333,6 +2356,8 @@ cv.addEventListener('pointerdown', (ev) => {
       dragMode = 'paint';
       return;
     }
+    /* remember it, so a drag that pans instead of painting can explain itself */
+    if (picked && MACHINES[picked.type].kind !== 'sink') grabbed = picked;
   }
   dragMode = 'maybe';
 });
@@ -2418,6 +2443,12 @@ cv.addEventListener('pointerup', (ev) => {
     return;
   }
   if (wasTap && g) handleTap(g, ev.clientX, ev.clientY);
+  else if (grabbed && moved > 24) {
+    /* dragged off a machine that had nowhere to send anything: without this the
+       gesture silently pans and looks broken */
+    toast(MACHINES[grabbed.type].name + "'s output is already in use \u2014 add a Splitter to branch it.");
+    grabbed = null;
+  }
   rebaseGesture();
 });
 cv.addEventListener('pointercancel', (ev) => {
@@ -2775,6 +2806,14 @@ function animateMachines(t) {
     if (a.glow) {
       const heat = f > 0 ? 0.35 + 0.65 * Math.abs(Math.sin(t * 2.2)) * f : 0;
       a.glow.material.color.setRGB(0.16 + heat * 0.84, 0.10 + heat * 0.42, 0.07 + heat * 0.05);
+    }
+    if (a.hints) {
+      /* a slow bob, enough to read as "start here" without becoming noise */
+      const bob = Math.sin(t * 2.1) * 0.07;
+      for (const arrow of a.hints) {
+        arrow.position.y = 0.78 + bob;
+        arrow.material.opacity = 0.55 + 0.3 * (0.5 + 0.5 * Math.sin(t * 2.1));
+      }
     }
     if (a.puff) {
       if (f <= 0.001) { a.puff.visible = false; }
