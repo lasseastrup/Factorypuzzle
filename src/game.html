@@ -3151,7 +3151,9 @@ cv.addEventListener('pointerdown', (ev) => {
   if (g && !machineAtScreen(ev.clientX, ev.clientY) && !entAt(g)) {
     const onBelt = beltAtScreen(ev.clientX, ev.clientY);
     if (onBelt) {
-      stroke = { fromBelt: onBelt, at: { x: g.x, z: g.z }, fromEnt: null, fromPort: 0, pts: [] };
+      /* anchor on the belt plane, not the ground 0.25 m behind it */
+      const anchor = beltPlanePoint(ev.clientX, ev.clientY) || g;
+      stroke = { fromBelt: onBelt, at: anchor, fromEnt: null, fromPort: 0, pts: [] };
       dragMode = 'paint';
       return;
     }
@@ -3432,19 +3434,22 @@ function repairInputSlots() {
 function spliceSpot(link, at) {
   const path = link.path;
   if (!path || path.length < 3) return null;
-  /* The junction goes where the player touched, projected onto the belt.
-
-     Grid snapping was asked for and turned out to be a mistake in practice: it moved the
-     junction up to half a metre from where the finger went, which fights intent — most visibly
-     when other junctions are nearby and half a metre decides which belt you get. Being on the
-     belt is the only alignment that matters here. */
-  const aim = { x: at.x, z: at.z };
   const arc = link.arc || arcTable(path);
 
-  /* Project the grid position onto the belt rather than taking the nearest existing vertex.
-     On an orthogonal run the grid point lies exactly on the path, so the junction ends up
-     both on the grid and on the belt — the two goals only appeared to conflict because the
-     path is sampled every 0.3 m and no vertex happened to sit on the grid. */
+  /* The junction goes where the player touched, projected onto the belt. Nothing else: no grid
+     snapping, and no placement check against machines.
+
+     Both of those were removed after they went wrong in the same way. Grid snapping moved the
+     junction up to half a metre from the aim. The placement check refused any point whose
+     one-metre box overlapped a machine — which a belt running past a row of machines does for
+     most of its length — and the fallback then searched the WHOLE belt for clearance and
+     cheerfully put the junction several metres away at a corner. A junction is an invisible
+     point on a belt that is already routed clear of everything; requiring a clear box around it
+     was inventing a constraint, and searching for one silently overrode the aim.
+
+     What is genuinely required: on the belt, clear of its ends, and not on top of another
+     junction. If the aim fails those, say so rather than moving it somewhere unintended. */
+  const aim = { x: at.x, z: at.z };
   let best = null;
   for (let i = 1; i < path.length; i++) {
     const a = path[i - 1], b = path[i];
@@ -3454,36 +3459,37 @@ function spliceSpot(link, at) {
     let t = ((aim.x - a.x) * dx + (aim.z - a.z) * dz) / L2;
     t = Math.max(0, Math.min(1, t));
     const p = { x: a.x + dx * t, z: a.z + dz * t };
-    const along = arc[i - 1] + Math.sqrt(L2) * t;
-    /* leave room at both ends, or one half would be too short to be a belt */
-    if (along < 0.9 || along > link.length - 0.9) continue;
     const d = dist2(p, aim);
-    if (!best || d < best.d) best = { d, p, i };
+    if (!best || d < best.d) best = { d, p, i, along: arc[i - 1] + Math.sqrt(L2) * t };
   }
   if (!best) return null;
 
-  /* If something else genuinely occupies that point — a machine the belt runs past — walk
-     along the belt looking for a clear spot, never away from it. */
-  let point = best.p, cut = best.i;
-  if (canPlace('junction', point.x, point.z, 0, null, link)) {
+  /* Nudge along the belt only far enough to clear an end or a neighbouring junction. A metre is
+     a nudge; further than that is a different place, and the player should be told instead. */
+  const NUDGE = 1.0, MIN_END = 0.9, MIN_GAP = 0.8;
+  const tooNear = (p) => ents.some((e) => isJunction(e) && Math.hypot(e.x - p.x, e.z - p.z) < MIN_GAP);
+  let point = best.p, cut = best.i, along = best.along;
+  if (along < MIN_END || along > link.length - MIN_END || tooNear(point)) {
     let found = null;
-    const order = path.map((p, i) => i)
-      .filter((i) => arc[i] > 0.9 && arc[i] < link.length - 0.9)
-      .sort((a, b) => dist2(path[a], aim) - dist2(path[b], aim));
-    for (const i of order) {
-      if (!canPlace('junction', path[i].x, path[i].z, 0, null, link)) { found = i; break; }
+    for (let i = 1; i < path.length; i++) {
+      if (arc[i] < MIN_END || arc[i] > link.length - MIN_END) continue;
+      if (Math.hypot(path[i].x - aim.x, path[i].z - aim.z) > NUDGE) continue;
+      if (tooNear(path[i])) continue;
+      if (!found || Math.abs(arc[i] - best.along) < Math.abs(arc[found] - best.along)) found = i;
     }
-    if (found == null) return null;
+    if (found == null) {
+      spliceSpot.why = tooNear(point) ? 'Too close to another junction.' : 'Too close to the end of that belt.';
+      return null;
+    }
     point = { x: path[found].x, z: path[found].z };
     cut = found;
   }
 
-  /* Split the path at that point, inserting it as a vertex. The halves are then exact
-     sub-paths of the original, so the run the player drew is unchanged. */
   const dedupe = (pts) => pts.filter((p, i) => i === 0 || dist2(p, pts[i - 1]) > 1e-12);
   const head = dedupe(path.slice(0, cut).concat([{ x: point.x, z: point.z }]));
   const tail = dedupe([{ x: point.x, z: point.z }].concat(path.slice(cut)));
-  if (head.length < 2 || tail.length < 2) return null;
+  if (head.length < 2 || tail.length < 2) { spliceSpot.why = 'Too close to the end of that belt.'; return null; }
+  spliceSpot.why = null;
   return { point, index: cut, head, tail };
 }
 
@@ -3493,7 +3499,7 @@ function spliceJunction(link, at, other, raw) {
   if (other === src || other === dst) { toast('That is already on this belt.'); return false; }
 
   const spot = spliceSpot(link, at);
-  if (!spot) { toast('No room for a junction along that belt.'); return false; }
+  if (!spot) { toast(spliceSpot.why || 'No room for a junction there.'); return false; }
 
   const keepLinks = links.slice(), keepEnts = ents.slice();
   const tier = link.tier;

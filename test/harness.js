@@ -2977,3 +2977,92 @@ setTimeout(() => {
 
   console.log(`\n${p} passed, ${f} failed`);
 }, 19400);
+
+/* --- a junction lands where you aimed, or you are told why not ---
+   spliceSpot used to require a clear one-metre box around the point, which a belt running past
+   a row of machines fails for most of its length, and then searched the WHOLE belt for
+   clearance. A blocked aim silently became a junction several metres away at a corner. */
+setTimeout(() => {
+  const api = globalThis.__api;
+  let p = 0, f = 0;
+  const ok = (c, l) => { console.log(`${c ? '  ok  ' : ' FAIL '} ${l}`); c ? p++ : f++; };
+  console.log('\n--- junctions land where aimed ---');
+
+  api.loadLevel(5);
+  const design = api.newDesign('Row');
+  api.editDesign(design);
+  const feed = api.addEntity('termIn', 1, 1, 1);
+  feed.wall = 'w'; feed.index = 0;
+  const row = [];
+  for (let i = 0; i < 4; i++) row.push(api.addEntity('smelter', 3 + i * 2.5, 4.5, 0));
+  api.resolve();
+
+  /* a trunk along the top, close over the row, then down — the reported layout */
+  const drawn = [];
+  for (let x = 2; x <= 10.5; x += 0.3) drawn.push({ x, z: 2.2 });
+  for (let z = 2.2; z <= 3.2; z += 0.3) drawn.push({ x: 10.5, z });
+  api.armBelt(2);
+  ok(api.layBelt(feed, row[3], drawn, null), 'a trunk runs close over the row');
+  api.resolve();
+  const trunk = api.links()[0];
+
+  /* the old placement check refused a good part of this belt */
+  let blocked = 0;
+  for (const q of trunk.path) if (api.canPlace('junction', q.x, q.z, 0, null, trunk)) blocked++;
+  ok(blocked > 0, `some points along it fail a placement check (${blocked} of ${trunk.path.length})`);
+
+  /* every aim along the trunk must give a junction at that aim, blocked or not */
+  /* Sweep only the stretch where no nudge is expected. Within 0.9 m of either end a junction
+     would leave a stub too short to be a belt, so the aim is nudged inward by design — an
+     earlier version of this swept those too and read the intended nudge as drift. */
+  let worst = 0, refused = 0, sampled = 0;
+  for (let k = 1; k < trunk.path.length - 1; k++) {
+    if (trunk.arc[k] < 1.3 || trunk.arc[k] > trunk.length - 1.3) continue;
+    sampled++;
+    const aim = trunk.path[k];
+    const spot = api.spliceSpot(trunk, aim);
+    if (!spot) { refused++; continue; }
+    worst = Math.max(worst, Math.hypot(spot.point.x - aim.x, spot.point.z - aim.z));
+  }
+  ok(sampled > 20, `sampled ${sampled} points along the trunk`);
+  ok(worst < 0.05, `every one lands on itself (worst drift ${worst.toFixed(3)} m)`);
+  ok(refused === 0, `and none are refused (${refused})`);
+
+  /* aiming at each smelter's own x must give a junction above that smelter */
+  for (let i = 0; i < 4; i++) {
+    let near = trunk.path[0], bd = Infinity;
+    for (const q of trunk.path) {
+      const d = Math.hypot(q.x - row[i].x, q.z - 2.2);
+      if (d < bd) { bd = d; near = q; }
+    }
+    const spot = api.spliceSpot(trunk, near);
+    const drift = spot ? Math.hypot(spot.point.x - near.x, spot.point.z - near.z) : 99;
+    ok(drift < 0.05, `smelter ${i}: the junction appears where aimed, not elsewhere (${drift.toFixed(2)} m)`);
+  }
+
+  /* it must never wander: a blocked or crowded aim is refused with a reason */
+  const j1 = api.spliceSpot(trunk, trunk.path[Math.floor(trunk.path.length / 2)]);
+  ok(!!j1, 'a mid-belt aim is accepted');
+  const nearEnd = api.spliceSpot(trunk, trunk.path[0]);
+  ok(!nearEnd, 'an aim at the very start is refused rather than moved');
+  ok(/end of that belt/i.test(api.spliceSpot.why || ''),
+    `and says why (${JSON.stringify(api.spliceSpot.why)})`);
+
+  /* two junctions cannot be stacked on the same spot */
+  const mid = trunk.path[Math.floor(trunk.path.length / 2)];
+  ok(api.spliceJunction(trunk, mid, row[1], null), 'one junction is spliced');
+  api.resolve();
+  const seg = api.links().find((l) => l.path.some((q) => Math.abs(q.x - mid.x) < 0.4 && Math.abs(q.z - mid.z) < 0.4));
+  if (seg) {
+    const again = api.spliceSpot(seg, mid);
+    ok(!again || Math.hypot(again.point.x - mid.x, again.point.z - mid.z) > 0.5,
+      'a second junction at the same point is refused or nudged clear, never stacked');
+  }
+
+  /* the footprint is small, because a junction has no body */
+  ok(api.MACHINES.junction.w < 0.8 && api.MACHINES.junction.h < 0.8,
+    `its footprint is small (${api.MACHINES.junction.w} x ${api.MACHINES.junction.h} m)`);
+
+  api.exitContext();
+  console.log(`\n${p} passed, ${f} failed`);
+}, 19900);

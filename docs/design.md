@@ -91,7 +91,15 @@ The threshold never rounds up. A stream at R per minute puts at least `floor(R �
 
   Grid snapping applies **along** the belt only. The aimed-at grid position is projected onto the path, so on an orthogonal run the junction lands exactly on the grid and exactly on the belt; across the belt it goes wherever the belt runs, because the alternative is moving the belt. Two goals that looked like they conflicted mostly did not — the path is sampled every 0.3 m, so no *vertex* sat on the grid even when the line passed straight through it.
 
-  **The junction goes where the finger went**, projected onto the belt. Grid snapping was asked for and was a mistake in practice: it moved the junction up to half a metre from the aim, and when other junctions are nearby half a metre decides which belt you get. Being on the belt is the only alignment that matters.
+  **The junction goes where the finger went**, projected onto the belt, and if it cannot go there the player is told rather than having it moved. Three separate mechanisms each overrode the aim and each had to go:
+
+  - grid snapping, which moved it up to half a metre;
+  - a placement check requiring a clear one-metre box, which a belt running past a row of machines fails along most of its length;
+  - a fallback that searched the *whole belt* for clearance, so a blocked aim became a junction several metres away at a corner.
+
+  The last is the worst kind of helpfulness: it always produced a result, so it never looked like a failure, it just looked like the game ignoring you. A junction is an invisible point on a belt already routed clear of everything, so requiring room around it was inventing a constraint. What is genuinely required is that it sit on the belt, clear of the ends, and not on top of another junction — and it may be nudged at most a metre to satisfy those.
+
+  Its footprint is 0.6 m rather than 1 m for the same reason. Grid snapping was asked for and was a mistake in practice: it moved the junction up to half a metre from the aim, and when other junctions are nearby half a metre decides which belt you get. Being on the belt is the only alignment that matters.
 
   **Aiming at a belt means the belt.** A junction has a one-metre footprint and sits *on* a belt, so a hit test on entities grabbed one from half a metre away — which made it impossible to tap a trunk anywhere near an existing junction. A machine between two already-tapped machines simply could not reach the trunk. An existing junction now only wins when the finger is genuinely on it, within 0.45 m.
 

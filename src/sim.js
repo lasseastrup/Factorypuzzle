@@ -39,8 +39,11 @@ const MACHINES = {
      whatever arrives and divides it evenly among whatever leaves, which is the same
      arithmetic either way. Splitter and merger remain as aliases so older designs still
      load, but the player is only ever offered a Junction. */
-  junction: { name: 'Junction', w: 1, h: 1, kind: 'junction', cost: 0, recipes: [] },
-  splitter: { name: 'Junction', w: 1, h: 1, kind: 'junction', cost: 0, recipes: [] },
+  /* A small footprint, because a junction has no body and sits on a belt that is already
+     routed clear of everything. A full metre square invented a constraint that does not exist
+     and collided with machines the belt was legitimately running past. */
+  junction: { name: 'Junction', w: 0.6, h: 0.6, kind: 'junction', cost: 0, recipes: [] },
+  splitter: { name: 'Junction', w: 0.6, h: 0.6, kind: 'junction', cost: 0, recipes: [] },
   /* A factory is a box whose interior is built elsewhere. It has no behaviour of its
      own: the solver replaces it with a copy of its definition. */
   factory: { name: 'Factory', w: 4, h: 4, kind: 'factory', cost: 0, recipes: [] },
@@ -49,7 +52,7 @@ const MACHINES = {
      the terminal and the interior carries on from there. */
   termIn:  { name: 'Input', w: 1, h: 2, kind: 'pass', cost: 0, recipes: [], wallFixture: true },
   termOut: { name: 'Output', w: 1, h: 2, kind: 'pass', cost: 0, recipes: [], wallFixture: true },
-  merger:   { name: 'Junction', w: 1, h: 1, kind: 'junction', cost: 0, recipes: [] },
+  merger:   { name: 'Junction', w: 0.6, h: 0.6, kind: 'junction', cost: 0, recipes: [] },
   sink:     { name: 'Depot',    w: 2, h: 2, kind: 'sink',     cost: 0, recipes: [] },
 };
 
